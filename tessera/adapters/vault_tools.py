@@ -35,22 +35,24 @@ def _newest_dated(text: str) -> datetime | None:
 
 
 def scan_stale_decisions(threshold_days_str: str) -> str:
-    """List decision notes older than N days, by frontmatter date.
+    """Scan decision notes older than N days and return a markdown report.
 
-    Falls back to file mtime if no date is in the frontmatter. Returns a
-    pipe-delimited string: "path|days_old" per stale entry, newline-joined.
-    Empty string if none are stale or the dir doesn't exist.
+    Reads frontmatter `updated:`/`date:`, falls back to file mtime. Output is
+    a ready-to-write markdown body — agents pass this straight to write_mailbox
+    without further formatting, dodging escape-sequence issues in tsr:logic.
     """
     try:
         threshold_days = int(threshold_days_str)
     except (TypeError, ValueError):
         threshold_days = 90
 
+    header = f"# Stale decisions (>= {threshold_days} days)"
+
     if not DECISIONS_DIR.exists():
-        return ""
+        return f"{header}\n\n_300 Decisions/ does not exist._\n"
 
     now = datetime.now(timezone.utc)
-    stale: list[str] = []
+    stale: list[tuple[Path, int]] = []
     for md in sorted(DECISIONS_DIR.rglob("*.md")):
         try:
             text = md.read_text(encoding="utf-8", errors="ignore")
@@ -64,9 +66,16 @@ def scan_stale_decisions(threshold_days_str: str) -> str:
                 continue
         age_days = (now - ts).days
         if age_days >= threshold_days:
-            rel = md.relative_to(VAULT)
-            stale.append(f"{rel}|{age_days}")
-    return "\n".join(stale)
+            stale.append((md, age_days))
+
+    if not stale:
+        return f"{header}\n\n_No stale decisions found._\n"
+
+    lines = [header, "", f"Found {len(stale)} stale decision(s):", ""]
+    for md, age in sorted(stale, key=lambda x: -x[1]):
+        rel = md.relative_to(VAULT)
+        lines.append(f"- [[{rel.stem}]] — {age} days old (`{rel}`)")
+    return "\n".join(lines) + "\n"
 
 
 def write_mailbox(message: str) -> str:
