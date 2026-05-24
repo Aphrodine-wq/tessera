@@ -1,6 +1,6 @@
 """LangChain bridge — call any LangChain Tool as a Tessera tool.
 
-Usage in .tsr.md:
+Usage in .t.md:
 
     ```tsr:tool
     tool web_search(query: String) -> String from langchain_community.tools.DuckDuckGoSearchRun
@@ -45,7 +45,7 @@ def _fallback_search(query: str) -> str:
     """Built-in callable for examples — no network access, deterministic output.
 
     Swap to `langchain_community.tools.DuckDuckGoSearchRun` (or any LangChain
-    BaseTool) in the .tsr.md `tool` block once LangChain is installed.
+    BaseTool) in the .t.md `tool` block once LangChain is installed.
     """
     return (
         f"[fallback search results for: {query}]\n"

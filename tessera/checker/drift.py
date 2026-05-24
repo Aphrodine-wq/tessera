@@ -1,6 +1,6 @@
 """Tessera ↔ live-engine drift checker.
 
-Parses a `.tsr.md` agent spec, extracts each agent's declared capability set
+Parses a `.t.md` agent spec, extracts each agent's declared capability set
 (from frontmatter `capabilities_requested` and any `spawn X with [...]`
 clauses), then scans the corresponding live engine implementation for code
 patterns that would require a capability the spec doesn't grant.
@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "paths", nargs="*",
-        help=".tsr.md files (defaults to scanning the vault's 200 Projects/)",
+        help=".t.md files (defaults to scanning the vault's 200 Projects/)",
     )
     parser.add_argument(
         "--vault-dir", default=str(VAULT_DIR),
@@ -252,10 +252,10 @@ def main(argv: list[str] | None = None) -> int:
         files = [Path(p) for p in args.paths]
     else:
         vault = Path(args.vault_dir)
-        files = sorted((vault / "200 Projects").glob("*.tsr.md"))
+        files = sorted((vault / "200 Projects").glob("*.t.md"))
 
     if not files:
-        print("No .tsr.md files found.", file=sys.stderr)
+        print("No .t.md files found.", file=sys.stderr)
         return 2
 
     print(f"Tessera drift check — {len(files)} spec(s)")

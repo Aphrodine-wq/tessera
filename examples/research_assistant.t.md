@@ -18,7 +18,7 @@ A one-agent program that demonstrates the three new substrates:
 Run with:
 
 ```
-TESSERA_LLM_BACKEND=ollama tessera compile examples/research_assistant.tsr.md \
+TESSERA_LLM_BACKEND=ollama tessera compile examples/research_assistant.t.md \
     --run ResearchAssistant --set topic="how do construction subs typically get paid"
 ```
 

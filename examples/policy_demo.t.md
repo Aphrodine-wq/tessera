@@ -11,7 +11,7 @@ the agent's plan transforms an input into an "answer". The `eval` block
 declares 5 cases: clean inputs should pass through; dirty inputs should be
 caught by the policy and produce a `Refusal`.
 
-Run with: `tessera eval examples/policy_demo.tsr.md`
+Run with: `tessera eval examples/policy_demo.t.md`
 
 ```tsr:policy
 policy NoPII {

@@ -1,7 +1,7 @@
 # Providers
 
 Tessera talks to every major LLM provider through a single `LLMBackend`
-interface. Pick a backend via `TESSERA_LLM_BACKEND=<id>` env var. Same `.tsr.md`
+interface. Pick a backend via `TESSERA_LLM_BACKEND=<id>` env var. Same `.t.md`
 file runs against any of them.
 
 ## Quick start

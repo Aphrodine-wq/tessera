@@ -1,4 +1,4 @@
-"""ParsedModule — frontmatter + substrate blocks extracted from a .tsr.md file.
+"""ParsedModule — frontmatter + substrate blocks extracted from a .t.md file.
 
 This is the minimum needed to feed the SIR emitter. The grammar of the substrate
 bodies themselves is parsed later (sir/build.py); here we only split the file.

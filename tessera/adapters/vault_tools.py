@@ -198,7 +198,7 @@ def scan_stale_projects(threshold_days_str: str) -> str:
     now = datetime.now(timezone.utc)
     stale: list[tuple[Path, int, str]] = []
     for md in sorted(PROJECTS_DIR.glob("*.md")):
-        if md.name.endswith(".tsr.md"):
+        if md.name.endswith(".t.md"):
             continue
         try:
             text = md.read_text(encoding="utf-8", errors="ignore")

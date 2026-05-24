@@ -7,7 +7,7 @@ writing your first agent.
 ## In one paragraph
 
 **Tessera** is a markdown-native language for building AI agents. You write
-agents in `.tsr.md` files using a small set of substrate-tagged code fences
+agents in `.t.md` files using a small set of substrate-tagged code fences
 (`tsr:agent`, `tsr:prompt`, `tsr:tool`, `tsr:neural`, `tsr:memory:*`). The
 compiler verifies them via **AEON** (73-engine formal verifier), persists
 their knowledge via **Synapse** (block/edge graph with synaptic weighting),
@@ -26,7 +26,7 @@ for it.
                           │   Obsidian / TheVault  │  ← the soil
                           │   markdown notes       │
                           └────────────┬───────────┘
-                                       │ .tsr.md
+                                       │ .t.md
                                        ▼
        ┌──────────────────────────────────────────────────────┐
        │                  Tessera                             │  ← the body
@@ -60,7 +60,7 @@ for it.
 ## What each does alone
 
 ### Tessera alone
-Compiles `.tsr.md` files into runnable agents with a typed effect system, a
+Compiles `.t.md` files into runnable agents with a typed effect system, a
 capability-gated actor scheduler, and substrate-aware compilation targets
 (symbolic bytecode, neural graph, knowledge vault, quantum-semantic plan).
 Without the other systems: agents run, but their verification is shallow,
@@ -84,7 +84,7 @@ Tessera: the same graph becomes agent semantic memory.
 
 ### Obsidian / TheVault alone
 A directory of markdown notes. Daily notes, project notes, Zettelkasten. With
-Tessera: any `.tsr.md` file in any folder of the vault is a runnable agent.
+Tessera: any `.t.md` file in any folder of the vault is a runnable agent.
 `tessera vault scan ~/Desktop/TheVault` lists every agent in the vault with
 its substrates, capabilities, and dependencies.
 
@@ -123,7 +123,7 @@ your personal knowledge live in the same brain.**
 
 ### 3. Agents written where you already think
 Obsidian's vault is where you already write daily notes, Zettelkasten, and
-project plans. Drop a `.tsr.md` file anywhere in the vault and `tessera vault
+project plans. Drop a `.t.md` file anywhere in the vault and `tessera vault
 scan` finds it. **There's no "agent management tool" — the vault IS the tool.**
 
 ### 4. Capability discipline across the whole stack
@@ -148,18 +148,18 @@ ways of thinking. **The architecture is legible.**
 ### Flow A — Build, verify, ship
 
 ```
-1. you write    ~/Desktop/TheVault/Agents/Reviewer.tsr.md
+1. you write    ~/Desktop/TheVault/Agents/Reviewer.t.md
                        │
 2. tessera vault scan ~/Desktop/TheVault
                        │
-                       │  Reviewer  ←  Agents/Reviewer.tsr.md
+                       │  Reviewer  ←  Agents/Reviewer.t.md
                        │      substrates: agent, prompt, memory:episodic
                        ▼
-3. tessera compile ~/Desktop/TheVault/Agents/Reviewer.tsr.md --aeon
+3. tessera compile ~/Desktop/TheVault/Agents/Reviewer.t.md --aeon
                        │
                        │  ✔ AEON: 4 functions, 0 errors, 0 warnings
                        ▼
-4. tessera vault run ~/Desktop/TheVault/Agents/Reviewer.tsr.md \
+4. tessera vault run ~/Desktop/TheVault/Agents/Reviewer.t.md \
         --agent Reviewer --set diff="..."
                        │
                        ▼
@@ -214,7 +214,7 @@ $ time tessera vault scan ~/Desktop/TheVault
     real    0m0.482s
 
 $ aeon scan ~/Desktop/TheVault --profile portfolio
-    [routes .tsr.md and .sir through TesseraTranslator]
+    [routes .t.md and .sir through TesseraTranslator]
     [73 engines run against each]
     [outputs per-agent diagnostics]
 ```
@@ -230,7 +230,7 @@ Rust, and Java code.
 Concrete use cases the forest unlocks:
 
 ### For solo AI developers
-- **Write an agent in 30 seconds.** `tessera vault new ~/Desktop/TheVault/Agents/X.tsr.md --agent X --template llm`. Drop into Obsidian, edit. Run.
+- **Write an agent in 30 seconds.** `tessera vault new ~/Desktop/TheVault/Agents/X.t.md --agent X --template llm`. Drop into Obsidian, edit. Run.
 - **Verify before you ship.** AEON catches capability bugs, PII leaks, missing substrate adapters — *before* the agent does damage in prod.
 - **One brain for everything.** Your agents' knowledge and your personal Zettelkasten share Synapse. Cross-pollination is free.
 
@@ -244,7 +244,7 @@ Concrete use cases the forest unlocks:
 - **Empirical cross-theory comparison.** Build two agents — one `@active_inference`, one `@react` — and compare on the same benchmark. Today the language can express both; tomorrow it'll verify both.
 
 ### For James specifically (the cofounder context)
-- **FTW agent layer.** When FTW needs an agent that explains a quote to a homeowner, you write it in `.tsr.md` in the FTW repo, AEON verifies it can't egress PII, Synapse stores its conversation history, Ollama runs the LLM call. No agent framework. No vendor lock-in.
+- **FTW agent layer.** When FTW needs an agent that explains a quote to a homeowner, you write it in `.t.md` in the FTW repo, AEON verifies it can't egress PII, Synapse stores its conversation history, Ollama runs the LLM call. No agent framework. No vendor lock-in.
 - **ConstructionAI inference + Tessera orchestration.** ConstructionAI is the model; Tessera is the agent that DECIDES when to call the model. `tsr:neural model classifier { ... }` cohabits with the agent. The model's output drives the next plan step.
 - **MHP customer service agent.** Same shape. Different vault folder.
 
@@ -257,7 +257,7 @@ head. The friction between them is documentation. Markdown solves this by
 making the syntax file ALSO the documentation, ALSO the spec, ALSO the
 runbook.
 
-A `.tsr.md` file is simultaneously:
+A `.t.md` file is simultaneously:
 - A **valid Obsidian note** — browsable, linkable, indexable
 - A **compilable program** — `tessera compile` produces SIR + executable
 - A **regenerated knowledge vault** — Κ target writes back to Synapse
@@ -295,7 +295,7 @@ a workshop for cognition.
 | Ollama backend (default) + Anthropic | shipped |
 | LangChain tool resolution | shipped |
 | PyTorch `neural` substrate | shipped (inference only; training planned) |
-| AEON `aeon portfolio` routes `.tsr.md` directly | next (this turn) |
+| AEON `aeon portfolio` routes `.t.md` directly | next (this turn) |
 | Parse + verify caching for fast vault scans | next (this turn) |
 
 ---
@@ -310,16 +310,16 @@ tessera substrates
 tessera vault scan ~/Desktop/TheVault
 
 # Scaffold a new agent in the vault
-tessera vault new ~/Desktop/TheVault/Agents/Bar.tsr.md --agent Bar --template llm
+tessera vault new ~/Desktop/TheVault/Agents/Bar.t.md --agent Bar --template llm
 
 # Run an agent
-tessera vault run ~/Desktop/TheVault/Agents/Bar.tsr.md --agent Bar --set q="..."
+tessera vault run ~/Desktop/TheVault/Agents/Bar.t.md --agent Bar --set q="..."
 
 # Verify with AEON
-tessera compile examples/researcher.tsr.md --aeon
+tessera compile examples/researcher.t.md --aeon
 
 # Persist to Synapse (dry-run by default; needs TESSERA_ALLOW_REAL_VAULT=1)
-tessera compile examples/researcher.tsr.md --synapse-write
+tessera compile examples/researcher.t.md --synapse-write
 
 # Pick an LLM backend
 TESSERA_LLM_BACKEND=ollama TESSERA_OLLAMA_MODEL=llama3.2 tessera compile ...

@@ -12,7 +12,7 @@ agent. Demonstrates the `neural` substrate compiling to a real PyTorch
 
 ```
 pip install torch
-tessera compile examples/perception.tsr.md --run Perception --set features="[0.1, 0.2, 0.3, 0.4]"
+tessera compile examples/perception.t.md --run Perception --set features="[0.1, 0.2, 0.3, 0.4]"
 ```
 
 If torch isn't installed the verifier still passes; only the runtime call

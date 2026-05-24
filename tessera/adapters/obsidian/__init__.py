@@ -1,14 +1,14 @@
 """Obsidian vault adapter — Tessera works directly on Obsidian vaults.
 
 An Obsidian vault is just a directory of markdown files. Tessera treats any
-``.tsr.md`` file as an agent declaration. This adapter lets you:
+``.t.md`` file as an agent declaration. This adapter lets you:
 
 - **Scan** a vault: walk the tree, find every Tessera agent, report what it
   declares (substrates used, capabilities requested, prompts/tools/models).
-- **Run** an agent from its vault path: ``vault run ~/Vault/Agents/Foo.tsr.md``
+- **Run** an agent from its vault path: ``vault run ~/Vault/Agents/Foo.t.md``
   is the same as ``compile`` but resolves relative paths against the vault root.
 - **Scaffold** a new agent in the vault from a starter template, so you can
-  drop into the vault folder and have a working `.tsr.md` ready to edit.
+  drop into the vault folder and have a working `.t.md` ready to edit.
 
 Wiki-link resolution (``[[NoteName]]`` inside templates) is best-effort: we
 scan the vault for any ``.md`` file whose stem matches the link, and inline
@@ -60,8 +60,8 @@ class VaultScan:
 
 
 def _looks_like_tessera(path: Path) -> bool:
-    """Quick filter — true if the file is named .tsr.md OR has Tessera blocks."""
-    if path.name.endswith(".tsr.md"):
+    """Quick filter — true if the file is named .t.md OR has Tessera blocks."""
+    if path.name.endswith(".t.md"):
         return True
     if path.suffix != ".md":
         return False
@@ -242,7 +242,7 @@ def scaffold_agent(
     template: str = "basic",
     overwrite: bool = False,
 ) -> Path:
-    """Write a starter .tsr.md at target_path. Raises if it exists and overwrite=False."""
+    """Write a starter .t.md at target_path. Raises if it exists and overwrite=False."""
     if template not in _AGENT_TEMPLATES:
         raise ValueError(
             f"unknown template {template!r}; available: {sorted(_AGENT_TEMPLATES)}"

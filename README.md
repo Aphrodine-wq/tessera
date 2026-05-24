@@ -1,7 +1,7 @@
 # Tessera
 
 **Markdown-native programming language for AI agents.** Write agents in
-`.tsr.md` files; the compiler verifies them via AEON, persists their knowledge
+`.t.md` files; the compiler verifies them via AEON, persists their knowledge
 via Synapse, discovers them in your Obsidian vault, and runs them through real
 LLM / LangChain / PyTorch backends.
 
@@ -17,7 +17,7 @@ cd ~/Projects/walt/tessera
 python3 -m venv .venv && .venv/bin/pip install -e .
 
 # Run the simplest agent
-.venv/bin/tessera compile examples/hello.tsr.md --run HelloAgent --set target=world
+.venv/bin/tessera compile examples/hello.t.md --run HelloAgent --set target=world
 # → HelloAgent() = 'hello world'
 ```
 
@@ -54,7 +54,7 @@ That's a Tessera program. Markdown all the way down.
 
 ```
 tessera/
-├── parser/        .tsr.md → ParsedModule (frontmatter + substrate blocks)
+├── parser/        .t.md → ParsedModule (frontmatter + substrate blocks)
 ├── sir/           SIR node taxonomy, region builder, textual serializer
 ├── verify/        local verification passes + diagnostics
 ├── interp/        tree-walking evaluator, actor scheduler, workspace runtime
@@ -73,7 +73,7 @@ tessera/
 
 ## Substrates — modes of thinking
 
-Each substrate is a typed code fence inside a `.tsr.md` file. The compiler
+Each substrate is a typed code fence inside a `.t.md` file. The compiler
 enforces boundaries between them (substrate adjacency, effect propagation,
 capability gating).
 
@@ -106,13 +106,13 @@ slice of the language.
 
 | Example | Demonstrates |
 |---|---|
-| `hello.tsr.md` | minimum: logic + agent, working memory |
-| `researcher.tsr.md` | multi-agent (Researcher, Critic, TeamLead), workspace broadcast, spawn/send/recv |
-| `researcher_full.tsr.md` | until-loops, notice handlers, comparison operators |
-| `research_assistant.tsr.md` | prompt + tool + LangChain bridge |
-| `perception.tsr.md` | PyTorch `neural` substrate |
-| `vault_assistant.tsr.md` | `memory:episodic` event log |
-| `knowledge_assistant.tsr.md` | `memory:semantic` via Synapse |
+| `hello.t.md` | minimum: logic + agent, working memory |
+| `researcher.t.md` | multi-agent (Researcher, Critic, TeamLead), workspace broadcast, spawn/send/recv |
+| `researcher_full.t.md` | until-loops, notice handlers, comparison operators |
+| `research_assistant.t.md` | prompt + tool + LangChain bridge |
+| `perception.t.md` | PyTorch `neural` substrate |
+| `vault_assistant.t.md` | `memory:episodic` event log |
+| `knowledge_assistant.t.md` | `memory:semantic` via Synapse |
 
 ---
 
@@ -123,11 +123,11 @@ slice of the language.
 tessera vault scan ~/Desktop/TheVault
 
 # Scaffold a new agent in the vault
-tessera vault new ~/Desktop/TheVault/Agents/NewBot.tsr.md \
+tessera vault new ~/Desktop/TheVault/Agents/NewBot.t.md \
     --agent NewBot --template llm
 
 # Compile + verify with AEON + run
-tessera compile examples/researcher.tsr.md --aeon \
+tessera compile examples/researcher.t.md --aeon \
     --run TeamLead --set topic="fair pricing"
 
 # Pick an LLM backend

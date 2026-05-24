@@ -1,4 +1,4 @@
-"""Parser: .tsr.md → ParsedModule."""
+"""Parser: .t.md → ParsedModule."""
 
 from .module import ParsedModule, SubstrateBlock, parse_file, parse_source
 
