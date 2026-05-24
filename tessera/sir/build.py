@@ -39,9 +39,10 @@ from dataclasses import dataclass
 
 from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
-    Effect, EpisodicEventDecl, EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl,
-    Module, Node, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region,
-    SkillDecl, ToolDecl, TraitDecl, WorkspaceDecl,
+    AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
+    EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
+    NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
+    TraitDecl, WorkspaceDecl,
 )
 
 
@@ -1109,6 +1110,67 @@ def _lower_intent(block: SubstrateBlock, mod: Module) -> None:
         cursor = end
 
 
+_ETHICS_HEAD_RE = re.compile(r"ethics\s*\{")
+_PRINCIPLE_RE = re.compile(r"principle\s+(\w+)\s*\{([^}]*)\}", re.DOTALL)
+_PRINCIPLE_RULE_RE = re.compile(r"rule\s*:\s*(['\"])(.*?)\1", re.DOTALL)
+_PRINCIPLE_WEIGHT_RE = re.compile(r"weight\s*:\s*([0-9.]+)")
+_ON_CONFLICT_RE = re.compile(r"on_conflict\s*:\s*(\w+)")
+_ON_VIOLATION_RE = re.compile(r"on_violation\s*:\s*(\w+)")
+
+
+def _lower_ethics(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _ETHICS_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `ethics { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+
+    principles: list[EthicsPrinciple] = []
+    for pm in _PRINCIPLE_RE.finditer(body):
+        pname, pbody = pm.group(1), pm.group(2)
+        rm = _PRINCIPLE_RULE_RE.search(pbody)
+        rule = rm.group(2).strip() if rm else ""
+        wm = _PRINCIPLE_WEIGHT_RE.search(pbody)
+        weight = float(wm.group(1)) if wm else 0.5
+        principles.append(EthicsPrinciple(name=pname, rule=rule, weight=weight))
+
+    cm = _ON_CONFLICT_RE.search(body)
+    vm = _ON_VIOLATION_RE.search(body)
+    mod.ethics = EthicsDecl(
+        principles=principles,
+        on_conflict=cm.group(1) if cm else "highest_weight",
+        on_violation=vm.group(1) if vm else "refuse",
+    )
+
+
+_AUTONOMY_HEAD_RE = re.compile(r"autonomy\s*\{")
+_AUTO_LEVEL_RE = re.compile(r"level\s*:\s*(\w+)")
+_AUTO_APPROVAL_RE = re.compile(r"require_approval\s*:\s*\[([^\]]*)\]")
+_AUTO_ESCALATE_RE = re.compile(r"escalate_when\s*:\s*(['\"])(.*?)\1", re.DOTALL)
+_AUTO_BOUNDARY_RE = re.compile(r"boundary\s*:\s*(['\"])(.*?)\1", re.DOTALL)
+
+
+def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _AUTONOMY_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `autonomy { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+
+    lm = _AUTO_LEVEL_RE.search(body)
+    am = _AUTO_APPROVAL_RE.search(body)
+    em = _AUTO_ESCALATE_RE.search(body)
+    bm = _AUTO_BOUNDARY_RE.search(body)
+    mod.autonomy = AutonomyDecl(
+        level=lm.group(1) if lm else "propose",
+        require_approval=[s.strip() for s in am.group(1).split(",") if s.strip()] if am else [],
+        escalate_when=em.group(2).strip() if em else "",
+        boundary=bm.group(2).strip() if bm else "",
+    )
+
+
 def _lower_knowledge(block: SubstrateBlock, mod: Module) -> None:
     src = block.body
     m = _KNOWLEDGE_HEAD_RE.search(src)
@@ -1174,6 +1236,10 @@ def lower(pm: ParsedModule) -> Module:
             _lower_traits(block, mod)
         elif block.substrate == "intent":
             _lower_intent(block, mod)
+        elif block.substrate == "ethics":
+            _lower_ethics(block, mod)
+        elif block.substrate == "autonomy":
+            _lower_autonomy(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

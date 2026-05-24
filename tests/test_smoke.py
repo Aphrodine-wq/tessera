@@ -1051,3 +1051,154 @@ def test_audit_records_policy_refusal(monkeypatch, tmp_path):
     run_agent(module, "SafetyAssistant", initial_beliefs={"question": "my SSN is on file"}, world=world)
     refusals = [e for e in world.audit if e.action == "refusal"]
     assert refusals and refusals[0].detail.get("policy") == "NoPII"
+
+
+# ---------------- ethics + autonomy (governance) ----------------
+
+GOVERNED_ADVISOR = Path(__file__).parent.parent / "examples" / "governed_advisor.t.md"
+
+
+def test_ethics_and_autonomy_parse():
+    module = lower(parse_file(GOVERNED_ADVISOR))
+    assert module.ethics is not None
+    names = {p.name for p in module.ethics.principles}
+    assert {"dignity", "honesty", "fairness"} <= names
+    assert module.ethics.on_violation == "refuse"
+    assert module.autonomy is not None
+    assert module.autonomy.level == "propose"
+    assert "payments" in module.autonomy.require_approval
+
+
+def test_ethics_preamble_orders_by_weight():
+    from tessera.governance import ethics_preamble
+    module = lower(parse_file(GOVERNED_ADVISOR))
+    out = ethics_preamble(module.ethics)
+    # dignity 1.0 > honesty 0.95 > fairness 0.9
+    assert out.index("[dignity]") < out.index("[honesty]") < out.index("[fairness]")
+    assert out.startswith("<ethics>")
+
+
+def test_ethics_injected_into_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+    from tessera.interp.eval import World
+
+    module = lower(parse_file(GOVERNED_ADVISOR))
+    world = World(module=module)
+    result = run_agent(module, "Advisor", initial_beliefs={"q": "should I take the bid"}, world=world)
+    # `guide` is not a gated action, so it runs and carries the ethics frame.
+    assert "<ethics>" in result and "[dignity]" in result
+    prompt_ev = next(e for e in world.audit if e.action == "prompt:guide")
+    assert "dignity" in prompt_ev.detail.get("ethics_applied", [])
+
+
+def test_autonomy_propose_blocks_gated_action(monkeypatch, tmp_path):
+    """At level=propose, a payments-touching action is blocked before it runs."""
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+    from tessera.parser.module import parse_source
+    from tessera.interp.eval import World
+
+    src = """---
+agent: Payer
+capabilities_requested: []
+---
+
+```tsr:autonomy
+autonomy { level: propose require_approval: [payments] }
+```
+
+```tsr:prompt
+prompt settle(q: String) -> String = "Process the payment for {q}"
+```
+
+```tsr:agent
+agent Payer {
+  beliefs:
+    @w q: String
+  intentions:
+    plan pay { let r = settle(q) return r }
+}
+```
+"""
+    module = lower(parse_source(src))
+    world = World(module=module)
+    result = run_agent(module, "Payer", initial_beliefs={"q": "the invoice"}, world=world)
+    assert result == "[approval-required: payments]"  # blocked, never called the backend
+    assert any(e.action == "approval_blocked:settle" for e in world.audit)
+
+
+def test_autonomy_act_freely_allows_gated_action(monkeypatch, tmp_path):
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+    from tessera.parser.module import parse_source
+    from tessera.interp.eval import World
+
+    src = """---
+agent: Payer
+capabilities_requested: []
+---
+
+```tsr:autonomy
+autonomy { level: act_freely require_approval: [payments] }
+```
+
+```tsr:prompt
+prompt settle(q: String) -> String = "Process the payment for {q}"
+```
+
+```tsr:agent
+agent Payer {
+  beliefs:
+    @w q: String
+  intentions:
+    plan pay { let r = settle(q) return r }
+}
+```
+"""
+    module = lower(parse_source(src))
+    world = World(module=module)
+    result = run_agent(module, "Payer", initial_beliefs={"q": "the invoice"}, world=world)
+    assert result.startswith("[noop:")  # ran the action
+    assert not any(e.action.startswith("approval_blocked") for e in world.audit)
+
+
+def test_governance_verify_flags_bad_level_and_weight():
+    from tessera.parser.module import parse_source
+    src = """---
+agent: A
+capabilities_requested: []
+---
+
+```tsr:ethics
+ethics { principle x { weight: 1.7 rule: "be good" } on_violation: refuse }
+```
+
+```tsr:autonomy
+autonomy { level: yolo require_approval: [payments] }
+```
+
+```tsr:agent
+agent A {
+  beliefs:
+    @w t: String
+  intentions:
+    plan p { return t }
+}
+```
+"""
+    diags = run_local(lower(parse_source(src)))
+    assert any(d.code == "E500" and "1.7" in d.message for d in diags)
+    assert any(d.code == "E502" and "yolo" in d.message for d in diags)

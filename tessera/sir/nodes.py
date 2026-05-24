@@ -294,6 +294,44 @@ class IntentDecl:
 
 
 @dataclass
+class EthicsPrinciple:
+    """One named value the agent reasons under."""
+    name: str
+    rule: str                 # the principle, injected into prompts as a values frame
+    weight: float = 0.5       # 0.0–1.0; orders principles and resolves conflicts
+
+
+@dataclass
+class EthicsDecl:
+    """The agent's ethical frame — values above hard policy.
+
+    Principles are injected into every prompt (outermost, before cognitive
+    posture) so the agent reasons under them, and every action records the frame
+    it operated under. `on_violation` is the declared disposition surfaced in the
+    audit trace, not a deterministic blocker (principles are natural-language).
+    """
+    principles: list[EthicsPrinciple] = field(default_factory=list)
+    on_conflict: str = "highest_weight"   # "highest_weight" | "first"
+    on_violation: str = "refuse"          # "refuse" | "flag" | "defer"
+
+
+@dataclass
+class AutonomyDecl:
+    """How much the agent may do unsupervised.
+
+    `level` sets the default disposition; `require_approval` names action classes
+    (capabilities, trait-style terms like `payments`/`auth`, or plain keywords)
+    that need a human. At `propose`, a gated action is blocked before it runs and
+    logged; at `act_with_rollback` it proceeds but is flagged; at `act_freely` it
+    proceeds silently. Autonomy with an audit trail = action you can still trace.
+    """
+    level: str = "propose"                          # "propose" | "act_with_rollback" | "act_freely"
+    require_approval: list[str] = field(default_factory=list)
+    escalate_when: str = ""
+    boundary: str = ""
+
+
+@dataclass
 class Module:
     name: str
     regions: list[Region] = field(default_factory=list)
@@ -310,6 +348,8 @@ class Module:
     skills: dict[str, SkillDecl] = field(default_factory=dict)
     traits: dict[str, TraitDecl] = field(default_factory=dict)
     intents: dict[str, IntentDecl] = field(default_factory=dict)
+    ethics: "EthicsDecl | None" = None
+    autonomy: "AutonomyDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:

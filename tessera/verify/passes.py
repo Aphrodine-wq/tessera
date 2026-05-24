@@ -190,12 +190,46 @@ def pass_4_intent(m: Module) -> list[Diagnostic]:
     return diags
 
 
+_AUTONOMY_LEVELS = {"propose", "act_with_rollback", "act_freely"}
+_ETHICS_CONFLICT = {"highest_weight", "first"}
+_ETHICS_VIOLATION = {"refuse", "flag", "defer"}
+
+
+def pass_5_governance(m: Module) -> list[Diagnostic]:
+    """Ethics + autonomy consistency.
+
+    E500 (error): ethics principle weight out of [0,1], or invalid on_conflict /
+    on_violation. E501 (warning): a principle with no rule (nothing to inject).
+    E502 (error): autonomy level outside the known set.
+    """
+    diags: list[Diagnostic] = []
+    if m.ethics is not None:
+        if m.ethics.on_conflict not in _ETHICS_CONFLICT:
+            diags.append(Diagnostic("E500", "error", "ethics", "-",
+                f"invalid on_conflict {m.ethics.on_conflict!r} (expected one of {sorted(_ETHICS_CONFLICT)})"))
+        if m.ethics.on_violation not in _ETHICS_VIOLATION:
+            diags.append(Diagnostic("E500", "error", "ethics", "-",
+                f"invalid on_violation {m.ethics.on_violation!r} (expected one of {sorted(_ETHICS_VIOLATION)})"))
+        for p in m.ethics.principles:
+            if not (0.0 <= p.weight <= 1.0):
+                diags.append(Diagnostic("E500", "error", f"ethics:{p.name}", "-",
+                    f"weight {p.weight} out of range [0.0, 1.0]"))
+            if not p.rule:
+                diags.append(Diagnostic("E501", "warning", f"ethics:{p.name}", "-",
+                    "principle has no rule — nothing to inject into prompts"))
+    if m.autonomy is not None and m.autonomy.level not in _AUTONOMY_LEVELS:
+        diags.append(Diagnostic("E502", "error", "autonomy", "-",
+            f"invalid level {m.autonomy.level!r} (expected one of {sorted(_AUTONOMY_LEVELS)})"))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
         *pass_2_effect_capability(m),
         *pass_3_trait_resolution(m),
         *pass_4_intent(m),
+        *pass_5_governance(m),
     ]
 
 

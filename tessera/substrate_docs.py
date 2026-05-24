@@ -191,6 +191,32 @@ SUBSTRATE_DOCS: dict[str, dict] = {
                    "provenance and accountability (the same value as auditable code in AEON).",
         "status": "shipped",
     },
+
+    "ethics": {
+        "summary": "Values frame — named principles the agent reasons under, above hard policy.",
+        "when_to_use": "When an agent acts on people and you want its values explicit and auditable. "
+                       "Each principle carries a weight and a rule; principles inject into every "
+                       "prompt (outermost, before cognitive posture) and every action records the "
+                       "ethical frame it operated under. Hard, mechanical constraints still belong in "
+                       "tsr:policy — ethics is the weighed values layer above it.",
+        "example_idiom": "ethics { principle honesty { weight: 0.95 rule: 'surface uncertainty; never fabricate' } on_violation: refuse }",
+        "maps_to": "Principlism (Beauchamp & Childress); value-sensitive design; Kantian dignity "
+                   "(treat persons as ends). The values half of responsible autonomy.",
+        "status": "shipped",
+    },
+
+    "autonomy": {
+        "summary": "How much the agent may do unsupervised — with a human-in-the-loop gate.",
+        "when_to_use": "When an agent can take consequential action. `level` sets the disposition "
+                       "(propose / act_with_rollback / act_freely); `require_approval` names action "
+                       "classes (payments, auth, irreversible, ...) that need a human. At `propose`, "
+                       "a gated action is blocked before it runs and logged in the audit trace — "
+                       "autonomy you can still hold accountable.",
+        "example_idiom": "autonomy { level: propose require_approval: [payments, auth] boundary: 'never act beyond the declared intent' }",
+        "maps_to": "Levels-of-automation (Sheridan & Verplank); human-in-the-loop control; "
+                   "capability-based authority. The agency half of responsible autonomy.",
+        "status": "shipped",
+    },
 }
 
 

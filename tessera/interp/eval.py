@@ -731,37 +731,62 @@ def _ensure_traits_resolved(world: World, agent_name: str) -> None:
 def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     from ..adapters.llm import get_backend
     from ..cache import semantic_cache_lookup, semantic_cache_put
+    from ..governance import approval_term, ethics_preamble
 
     bindings = {pname: arg_vals[i] for i, (pname, _) in enumerate(prompt.params)}
     rendered = prompt.template
     for k, v in bindings.items():
         rendered = rendered.replace("{" + k + "}", str(v))
 
-    # Inject the cognitive-trait preamble BEFORE the cache lookup: a trait-shaped
-    # prompt is a genuinely different request and should cache separately.
+    state = world.state_for(agent_name) if agent_name is not None else None
+    plan_name = state.active_plan.name if (state and state.active_plan) else ""
+    caps = frozenset(state.capabilities) if state else frozenset()
+
+    # Autonomy gate — runs BEFORE any cost. A gated action is blocked at the
+    # `propose` level, flagged at `act_with_rollback`, and silent at `act_freely`.
+    auto = world.module.autonomy
+    if auto is not None and agent_name is not None:
+        actx = TriggerContext(text=rendered, plan_name=plan_name, capabilities=caps)
+        term = approval_term(auto, actx, f"prompt:{prompt.name}")
+        if term is not None:
+            if auto.level == "propose":
+                world.record(agent_name, f"approval_blocked:{prompt.name}",
+                             needs=term, level=auto.level)
+                return f"[approval-required: {term}]"
+            if auto.level == "act_with_rollback":
+                world.record(agent_name, f"approval_required:{prompt.name}",
+                             needs=term, level=auto.level, acted=True)
+
+    # Build the prompt preamble BEFORE the cache lookup (a framed prompt is a
+    # genuinely different request, so it caches separately). Ethics is outermost
+    # — values frame first, then cognitive posture (traits).
+    preamble = ""
+    ethics_applied: list[str] = []
+    if world.module.ethics is not None:
+        ep = ethics_preamble(world.module.ethics)
+        if ep:
+            preamble += ep
+            ethics_applied = [p.name for p in world.module.ethics.principles]
+
     fired_names: list[str] = []
     if agent_name is not None:
-        state = world.state_for(agent_name)
-        ctx = TriggerContext(
-            text=rendered,
-            plan_name=(state.active_plan.name if state.active_plan else ""),
-            capabilities=frozenset(state.capabilities),
-            params=bindings,
-        )
+        ctx = TriggerContext(text=rendered, plan_name=plan_name,
+                             capabilities=caps, params=bindings)
         fired = list(state.global_traits) + list(state.active_plan_traits) \
             + fire_traits(state.per_call_traits, ctx)
         fired_names = [t.name for t in fired]
-        preamble = trait_preamble(fired)
-        if preamble:
-            rendered = preamble + rendered
+        preamble += trait_preamble(fired)
+
+    if preamble:
+        rendered = preamble + rendered
 
     # Semantic cache — short-circuit if a near-identical prompt has been seen.
     cached = semantic_cache_lookup(rendered)
     if cached is not None:
         world.region_results.setdefault("_semantic_cache_hits", 0)
         world.region_results["_semantic_cache_hits"] += 1
-        world.record(agent_name, f"prompt:{prompt.name}",
-                     traits_fired=fired_names, cost=0.0, cached=True)
+        world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
+                     ethics_applied=ethics_applied, cost=0.0, cached=True)
         return cached["text"]
 
     backend = get_backend()
@@ -769,8 +794,8 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     world.region_results.setdefault("_prompt_cost", 0.0)
     world.region_results["_prompt_cost"] += result.cost_dollars
     semantic_cache_put(rendered, result.text, backend=result.backend, model=result.model)
-    world.record(agent_name, f"prompt:{prompt.name}",
-                 traits_fired=fired_names, cost=result.cost_dollars, cached=False)
+    world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
+                 ethics_applied=ethics_applied, cost=result.cost_dollars, cached=False)
     return result.text
 
 
