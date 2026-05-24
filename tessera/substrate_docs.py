@@ -4,7 +4,7 @@ Every substrate is a CATEGORY of cognition an agent can do. Each entry has:
 
   - ``summary``: 1-line description in plain English
   - ``when_to_use``: a concrete prompt for the builder
-  - ``example_idiom``: a typical 1-2 line snippet from a .tsr.md file
+  - ``example_idiom``: a typical 1-2 line snippet from a .t.md file
   - ``maps_to``: the theory or system this corresponds to (for the curious)
   - ``status``: ``shipped`` | ``partial`` | ``planned``
 
@@ -164,6 +164,32 @@ SUBSTRATE_DOCS: dict[str, dict] = {
         "example_idiom": "@maintain(phi > 0.4) agent Researcher { ... }",
         "maps_to": "IIT (Tononi), GNW (Dehaene), RPT (Lamme), ToM (Premack/Woodruff)",
         "status": "planned",
+    },
+
+    "traits": {
+        "summary": "Cognitive posture — channeled tendencies that modify how the agent reasons.",
+        "when_to_use": "When an agent needs a non-default reasoning style: assume-wrong-by-default "
+                       "(doubt_first), lateral cross-context scanning (cross_brain), completeness "
+                       "verification (compulsive), threat-scanning (hypervigilant), etc. Traits "
+                       "compose — multiple stack, priority-weighted at decision points.",
+        "example_idiom": "trait doubt_first { trigger: any_claim; behavior: 'verify before committing'; priority: 0.9 }",
+        "maps_to": "Channeled psychological tendencies (Wakefield/Nesse harmful-dysfunction framework, "
+                   "inverted — same shape, productive direction). Inspired by the Twin Protocol's "
+                   "ADHD + depression posture.",
+        "status": "shipped",
+    },
+
+    "intent": {
+        "summary": "Purpose — what an agent (or plan) is for, in checkable form.",
+        "when_to_use": "When an agent's actions need to be auditable against a goal. Declares the "
+                       "goal, success criteria, and forbidden outcomes; agents bind via "
+                       "`intends X`, plans via `serves X`. `forbidden` entries must map to tsr:policy "
+                       "rules, so stated purpose can't ship without its guardrails. Every runtime "
+                       "action is stamped with the intent it served in the audit trace.",
+        "example_idiom": "intent estimate { goal: 'bounded cost estimate' success: total > 0 forbidden: [NoPII] }",
+        "maps_to": "Goal/intention in BDI (Bratman); design-by-contract preconditions/postconditions; "
+                   "provenance and accountability (the same value as auditable code in AEON).",
+        "status": "shipped",
     },
 }
 

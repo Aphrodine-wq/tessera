@@ -39,9 +39,9 @@ from dataclasses import dataclass
 
 from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
-    Effect, EpisodicEventDecl, EvalCaseDecl, KnowledgeSchemaDecl, Module,
-    Node, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl,
-    ToolDecl, WorkspaceDecl,
+    Effect, EpisodicEventDecl, EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl,
+    Module, Node, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region,
+    SkillDecl, ToolDecl, TraitDecl, WorkspaceDecl,
 )
 
 
@@ -377,10 +377,11 @@ def _lower_logic(block: SubstrateBlock, mod: Module) -> None:
 
 
 _WORKSPACE_HEAD_RE = re.compile(r"workspace\s+(\w+)\s*\{")
-_AGENT_HEAD_RE = re.compile(r"agent\s+(\w+)\s*\{")
-_PLAN_HEAD_RE = re.compile(r"plan\s+(\w+)\s*\{")
+_AGENT_HEAD_RE = re.compile(r"agent\s+(\w+)(?:\s+intends\s+(\w+))?\s*\{")
+_PLAN_HEAD_RE = re.compile(r"plan\s+(\w+)(?:\s+serves\s+(\w+))?\s*\{")
 _NOTICE_HEAD_RE = re.compile(r"notice\s+when\s+(.+?)\s*\{")
 _BELIEF_LINE_RE = re.compile(r"@(\w+)\s+(\w+)\s*:\s*(\w+)")
+_TRAITS_LINE_RE = re.compile(r"^\s*traits\s*:\s*\[([^\]]*)\]", re.MULTILINE)
 
 
 def _balanced_extract(src: str, start_idx: int) -> tuple[str, int]:
@@ -434,16 +435,23 @@ def _lower_agents_in_block(block: SubstrateBlock, mod: Module) -> None:
         found_any = True
         brace = src.index("{", m.end() - 1)
         body, end = _balanced_extract(src, brace)
-        _lower_one_agent(m.group(1), body, block, mod)
+        _lower_one_agent(m.group(1), body, block, mod, intent=m.group(2))
         cursor = end
     if not found_any:
         raise SyntaxFail("expected at least one `agent Name { ... }` in agent block")
 
 
-def _lower_one_agent(agent_name: str, body: str, block: SubstrateBlock, mod: Module) -> None:
-    agent_region = Region(name=f"agent:{agent_name}")
+def _lower_one_agent(agent_name: str, body: str, block: SubstrateBlock, mod: Module,
+                     intent: str | None = None) -> None:
+    agent_region = Region(name=f"agent:{agent_name}", intent=intent)
     notice_nodes: list[Node] = []
     plan_nodes: list[Node] = []
+
+    # Attach cognitive traits declared on the agent (`traits: [a, b]`). Without
+    # this the line is silently swallowed by belief-absorption and never wired.
+    tl = _TRAITS_LINE_RE.search(body)
+    if tl:
+        agent_region.trait_names = [t.strip() for t in tl.group(1).split(",") if t.strip()]
 
     cursor = 0
     while cursor < len(body):
@@ -465,9 +473,11 @@ def _lower_one_agent(agent_name: str, body: str, block: SubstrateBlock, mod: Mod
 
         if kind == "plan":
             plan_name = next_m.group(1)
+            plan_intent = next_m.group(2) or intent  # `serves X`, else inherit agent's
             plan_brace = body.index("{", next_m.end() - 1)
             plan_body, end_idx = _balanced_extract(body, plan_brace)
-            plan_region = Region(name=f"plan:{plan_name}", parent=agent_region.id)
+            plan_region = Region(name=f"plan:{plan_name}", parent=agent_region.id,
+                                 intent=plan_intent)
             _lower_plan_body(plan_body, plan_region, block)
             mod.regions.append(plan_region)
             plan_nodes.append(Node(
@@ -1019,6 +1029,86 @@ def _lower_procedural(block: SubstrateBlock, mod: Module) -> None:
         )
 
 
+_TRAIT_HEAD_RE = re.compile(r"trait\s+(\w+)\s*\{")
+# trigger stops at newline OR ';' so both the multi-line and inline
+# (`trigger: x; behavior: '...'`) forms parse correctly.
+_TRAIT_TRIGGER_RE = re.compile(r"trigger\s*:\s*([^\n;]+)")
+_TRAIT_BEHAVIOR_RE = re.compile(r"behavior\s*:\s*(['\"])(.*?)\1", re.DOTALL)
+_TRAIT_PRIORITY_RE = re.compile(r"priority\s*:\s*([0-9.]+)")
+_TRAIT_SCOPE_RE = re.compile(r"scope\s*:\s*(['\"]?)(\w+)\1")
+
+
+def _lower_traits(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    cursor = 0
+    while True:
+        m = _TRAIT_HEAD_RE.search(src, cursor)
+        if not m:
+            break
+        name = m.group(1)
+        brace = src.index("{", m.end() - 1)
+        tbody, end = _balanced_extract(src, brace)
+
+        tm = _TRAIT_TRIGGER_RE.search(tbody)
+        trigger = [t.strip() for t in tm.group(1).split("|")] if tm else []
+        trigger = [t for t in (x.strip().rstrip(";").strip() for x in trigger) if t]
+        bm = _TRAIT_BEHAVIOR_RE.search(tbody)
+        behavior = bm.group(2).strip() if bm else ""
+        pm = _TRAIT_PRIORITY_RE.search(tbody)
+        priority = float(pm.group(1)) if pm else 0.5
+        sm = _TRAIT_SCOPE_RE.search(tbody)
+        scope = sm.group(2).strip() if sm else "per_call"
+
+        if not trigger or not behavior:
+            raise SyntaxFail(f"trait {name!r} requires both `trigger` and `behavior`")
+        mod.traits[name] = TraitDecl(
+            name=name, trigger=trigger, behavior=behavior,
+            priority=priority, scope=scope,
+        )
+        cursor = end
+
+
+_INTENT_HEAD_RE = re.compile(r"intent\s+(\w+)\s*\{")
+_INTENT_GOAL_RE = re.compile(r"goal\s*:\s*(['\"])(.*?)\1", re.DOTALL)
+_INTENT_WHY_RE = re.compile(r"why\s*:\s*(['\"])(.*?)\1", re.DOTALL)
+_INTENT_SUCCESS_RE = re.compile(r"success\s*:\s*([^\n]+)")
+_INTENT_FORBIDDEN_RE = re.compile(r"forbidden\s*:\s*\[([^\]]*)\]")
+
+
+def _lower_intent(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    cursor = 0
+    while True:
+        m = _INTENT_HEAD_RE.search(src, cursor)
+        if not m:
+            break
+        name = m.group(1)
+        brace = src.index("{", m.end() - 1)
+        ibody, end = _balanced_extract(src, brace)
+
+        gm = _INTENT_GOAL_RE.search(ibody)
+        goal = gm.group(2).strip() if gm else ""
+        wm = _INTENT_WHY_RE.search(ibody)
+        why = wm.group(2).strip() if wm else ""
+        fm = _INTENT_FORBIDDEN_RE.search(ibody)
+        forbidden = [s.strip() for s in fm.group(1).split(",") if s.strip()] if fm else []
+        # success: may be a bracketed list or a single bare predicate per line.
+        success: list[str] = []
+        for sm in _INTENT_SUCCESS_RE.finditer(ibody):
+            raw = sm.group(1).strip().rstrip(";").strip()
+            if raw.startswith("[") and raw.endswith("]"):
+                success.extend(s.strip() for s in raw[1:-1].split(",") if s.strip())
+            elif raw:
+                success.append(raw)
+
+        if not goal:
+            raise SyntaxFail(f"intent {name!r} requires a `goal`")
+        mod.intents[name] = IntentDecl(
+            name=name, goal=goal, success=success, forbidden=forbidden, why=why,
+        )
+        cursor = end
+
+
 def _lower_knowledge(block: SubstrateBlock, mod: Module) -> None:
     src = block.body
     m = _KNOWLEDGE_HEAD_RE.search(src)
@@ -1080,6 +1170,10 @@ def lower(pm: ParsedModule) -> Module:
             _lower_knowledge(block, mod)
         elif block.substrate == "memory:procedural":
             _lower_procedural(block, mod)
+        elif block.substrate == "traits":
+            _lower_traits(block, mod)
+        elif block.substrate == "intent":
+            _lower_intent(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

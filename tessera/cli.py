@@ -19,7 +19,7 @@ from .verify.passes import run_local
 
 def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = False,
                  synapse_mode: str | None = None, run: str | None = None,
-                 sets: list[str] | None = None) -> int:
+                 sets: list[str] | None = None, audit: str | None = None) -> int:
     pm = parse_file(file)
     module = lower(pm)
     sir_text = emit_module(module)
@@ -48,9 +48,17 @@ def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = Fal
             print(f"  note: {note}")
 
     if run:
+        from .interp.eval import World
         beliefs = dict(kv.split("=", 1) for kv in (sets or []))
-        result = run_agent(module, run, initial_beliefs=beliefs)
+        world = World(module=module)
+        result = run_agent(module, run, initial_beliefs=beliefs, world=world)
         print(f"\n{run}() = {result!r}")
+        if audit:
+            import json
+            with open(audit, "w") as fh:
+                for ev in world.audit:
+                    fh.write(json.dumps(ev.to_dict()) + "\n")
+            print(f"wrote audit trace ({len(world.audit)} events) → {audit}")
     return 0
 
 
@@ -67,6 +75,7 @@ def _cmd_compile(args: argparse.Namespace) -> int:
         synapse_mode=synapse_mode,
         run=args.run,
         sets=args.set,
+        audit=args.audit,
     )
 
 
@@ -199,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # compile
-    cp = sub.add_parser("compile", help="Parse, verify, optionally emit/run a .tsr.md file")
+    cp = sub.add_parser("compile", help="Parse, verify, optionally emit/run a .t.md file")
     cp.add_argument("file")
     cp.add_argument("--emit-sir", metavar="OUT")
     cp.add_argument("--aeon", action="store_true")
@@ -207,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     cp.add_argument("--synapse-write", action="store_true")
     cp.add_argument("--run", metavar="AGENT")
     cp.add_argument("--set", action="append")
+    cp.add_argument("--audit", metavar="OUT", help="write the run's audit trace as JSONL")
     cp.set_defaults(fn=_cmd_compile)
 
     # vault — Obsidian adapter

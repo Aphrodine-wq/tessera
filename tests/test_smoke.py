@@ -11,15 +11,15 @@ from tessera.sir.emit import emit_module
 from tessera.verify.passes import run_local
 
 
-HELLO = Path(__file__).parent.parent / "examples" / "hello.tsr.md"
-RESEARCHER = Path(__file__).parent.parent / "examples" / "researcher.tsr.md"
-RESEARCH_ASSISTANT = Path(__file__).parent.parent / "examples" / "research_assistant.tsr.md"
-VAULT_ASSISTANT = Path(__file__).parent.parent / "examples" / "vault_assistant.tsr.md"
-RESEARCHER_FULL = Path(__file__).parent.parent / "examples" / "researcher_full.tsr.md"
-KNOWLEDGE_ASSISTANT = Path(__file__).parent.parent / "examples" / "knowledge_assistant.tsr.md"
-POLICY_DEMO = Path(__file__).parent.parent / "examples" / "policy_demo.tsr.md"
-SKILLED_AGENT = Path(__file__).parent.parent / "examples" / "skilled_agent.tsr.md"
-PARALLEL_TEAM = Path(__file__).parent.parent / "examples" / "parallel_team.tsr.md"
+HELLO = Path(__file__).parent.parent / "examples" / "hello.t.md"
+RESEARCHER = Path(__file__).parent.parent / "examples" / "researcher.t.md"
+RESEARCH_ASSISTANT = Path(__file__).parent.parent / "examples" / "research_assistant.t.md"
+VAULT_ASSISTANT = Path(__file__).parent.parent / "examples" / "vault_assistant.t.md"
+RESEARCHER_FULL = Path(__file__).parent.parent / "examples" / "researcher_full.t.md"
+KNOWLEDGE_ASSISTANT = Path(__file__).parent.parent / "examples" / "knowledge_assistant.t.md"
+POLICY_DEMO = Path(__file__).parent.parent / "examples" / "policy_demo.t.md"
+SKILLED_AGENT = Path(__file__).parent.parent / "examples" / "skilled_agent.t.md"
+PARALLEL_TEAM = Path(__file__).parent.parent / "examples" / "parallel_team.t.md"
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 
 
@@ -343,7 +343,7 @@ def test_policy_allows_clean_input():
 
 
 def test_vault_scan_finds_examples():
-    """Pointing scan_vault at our examples/ directory should find every .tsr.md agent."""
+    """Pointing scan_vault at our examples/ directory should find every .t.md agent."""
     from tessera.adapters.obsidian import scan_vault
     scan = scan_vault(EXAMPLES_DIR)
     names = {a.agent_name for a in scan.agents}
@@ -369,7 +369,7 @@ def test_vault_scan_records_substrates_per_agent():
 
 def test_scaffold_agent_writes_then_parses(tmp_path):
     from tessera.adapters.obsidian import scaffold_agent
-    target = tmp_path / "Agents" / "NewBot.tsr.md"
+    target = tmp_path / "Agents" / "NewBot.t.md"
     written = scaffold_agent(target, "NewBot", template="basic")
     assert written.exists()
     pm = parse_file(written)
@@ -379,7 +379,7 @@ def test_scaffold_agent_writes_then_parses(tmp_path):
 
 def test_scaffold_refuses_overwrite_without_force(tmp_path):
     from tessera.adapters.obsidian import scaffold_agent
-    target = tmp_path / "Foo.tsr.md"
+    target = tmp_path / "Foo.t.md"
     scaffold_agent(target, "Foo", template="basic")
     raised = False
     try:
@@ -496,7 +496,7 @@ def test_parse_cache_returns_same_object_on_warm_hit(tmp_path):
     """parse_file_cached returns the cached ParsedModule until mtime changes."""
     from tessera.cache import invalidate_parse_cache, parse_file_cached
     invalidate_parse_cache()
-    src = tmp_path / "thing.tsr.md"
+    src = tmp_path / "thing.t.md"
     src.write_text(HELLO.read_text())
     first = parse_file_cached(src)
     second = parse_file_cached(src)
@@ -506,7 +506,7 @@ def test_parse_cache_returns_same_object_on_warm_hit(tmp_path):
 def test_parse_cache_invalidates_on_file_change(tmp_path):
     from tessera.cache import invalidate_parse_cache, parse_file_cached
     invalidate_parse_cache()
-    src = tmp_path / "thing.tsr.md"
+    src = tmp_path / "thing.t.md"
     src.write_text(HELLO.read_text())
     first = parse_file_cached(src)
     # Touch file to advance mtime_ns
@@ -726,3 +726,328 @@ def test_synapse_writes_to_test_db(tmp_path):
         ).fetchone()[0]
     assert n_blocks == artifact.block_count
     assert n_edges == artifact.edge_count
+
+
+# ---------------- cognitive traits ----------------
+
+TRAITS_EXAMPLE = Path(__file__).parent.parent / "examples" / "researcher_with_traits.t.md"
+
+
+def test_traits_parse_local_def_and_agent_attachment():
+    from tessera.parser.module import parse_source
+    src = """---
+agent: T
+capabilities_requested: []
+---
+
+```tsr:traits
+trait skeptic {
+  trigger: any_claim
+  behavior: "doubt the first read"
+  priority: 0.9
+}
+```
+
+```tsr:agent
+agent T {
+  beliefs:
+    @w topic: String
+  traits: [skeptic, doubt_first]
+  intentions:
+    plan p { return topic }
+}
+```
+"""
+    module = lower(parse_source(src))
+    assert "skeptic" in module.traits
+    assert module.traits["skeptic"].trigger == ["any_claim"]
+    assert module.traits["skeptic"].priority == 0.9
+    assert module.agents["T"].trait_names == ["skeptic", "doubt_first"]
+
+
+def test_traits_builtin_resolves_without_local_def():
+    from tessera.parser.module import parse_source
+    from tessera.traits import resolve_trait
+    src = """---
+agent: T
+capabilities_requested: []
+---
+
+```tsr:agent
+agent T {
+  beliefs:
+    @w topic: String
+  traits: [doubt_first]
+  intentions:
+    plan p { return topic }
+}
+```
+"""
+    module = lower(parse_source(src))
+    t = resolve_trait("doubt_first", module)
+    assert t is not None and t.priority == 0.9 and t.scope == "per_call"
+
+
+def test_traits_end_to_end_noop_injects_behavior(monkeypatch, tmp_path):
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+
+    module = lower(parse_file(TRAITS_EXAMPLE))
+    result = run_agent(module, "ThoughtfulResearcher", initial_beliefs={"topic": "retainage"})
+    assert isinstance(result, str)
+    # noop echoes the first 80 chars of the (now trait-prefixed) prompt's first line.
+    assert "<cognitive-traits>" in result
+    assert "[doubt_first]" in result  # highest-priority trait leads the preamble
+
+
+def test_trait_trigger_matchers():
+    from tessera.traits import TriggerContext, _match_term
+    q = TriggerContext(text="what is retainage?")
+    claim = TriggerContext(text="retainage is a holdback.")
+    assert _match_term("any_question", q)
+    assert not _match_term("any_question", claim)
+    assert _match_term("any_claim", claim)
+    assert _match_term("payments", TriggerContext(text="process the stripe charge"))
+    assert _match_term("secrets", TriggerContext(text="store this", capabilities=frozenset({"VaultWrite"})))
+    assert _match_term("any_done_claim", TriggerContext(text="the task is done"))
+    assert not _match_term("any_done_claim", TriggerContext(text="the work continues"))
+    # An unknown / typo'd term never fires.
+    assert not _match_term("frobnicate", claim)
+
+
+def test_trait_preamble_orders_by_priority_and_dedupes():
+    from tessera.traits import BUILTIN_TRAITS, trait_preamble
+    fired = [BUILTIN_TRAITS["cross_brain"], BUILTIN_TRAITS["hypervigilant"],
+             BUILTIN_TRAITS["doubt_first"], BUILTIN_TRAITS["doubt_first"]]
+    out = trait_preamble(fired)
+    # hypervigilant 0.95 > doubt_first 0.9 > cross_brain 0.85
+    assert out.index("[hypervigilant]") < out.index("[doubt_first]") < out.index("[cross_brain]")
+    assert out.count("[doubt_first]") == 1  # deduped
+    assert out.startswith("<cognitive-traits>") and out.rstrip().endswith("</cognitive-traits>")
+
+
+def test_trait_per_plan_fires_from_plan_static_context(monkeypatch, tmp_path):
+    """A per_plan trait evaluates its trigger against the plan's prompt templates
+    at plan entry, then injects into the call."""
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+    from tessera.parser.module import parse_source
+    src = """---
+agent: Ideator
+capabilities_requested: []
+---
+
+```tsr:traits
+trait burst {
+  trigger: ideation
+  behavior: "go wide before converging"
+  priority: 0.6
+  scope: per_plan
+}
+```
+
+```tsr:prompt
+prompt ideate(x: String) -> String = "brainstorm options for {x}"
+```
+
+```tsr:agent
+agent Ideator {
+  beliefs:
+    @w topic: String
+  traits: [burst]
+  intentions:
+    plan ideation_plan { let a = ideate(topic) return a }
+}
+```
+"""
+    module = lower(parse_source(src))
+    result = run_agent(module, "Ideator", initial_beliefs={"topic": "logos"})
+    assert "[burst]" in result
+
+
+def test_trait_global_scope_injects_across_non_matching_calls(monkeypatch, tmp_path):
+    """A global trait fires once at agent start against the AGGREGATE of all plan
+    templates, then injects into a call whose own text wouldn't match its trigger."""
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+    from tessera.parser.module import parse_source
+    # `designit` seeds the design_question trigger in the aggregate context;
+    # `main` (last plan) returns the greet output, which has no design keyword —
+    # if [arch] appears there, global scope worked.
+    src = """---
+agent: GlobalBot
+capabilities_requested: []
+---
+
+```tsr:traits
+trait arch {
+  trigger: design_question
+  behavior: "reuse a proven structure"
+  priority: 0.5
+  scope: global
+}
+```
+
+```tsr:prompt
+prompt designit(x: String) -> String = "design the schema for {x}"
+prompt greet(x: String) -> String = "hello {x}"
+```
+
+```tsr:agent
+agent GlobalBot {
+  beliefs:
+    @w topic: String
+  traits: [arch]
+  intentions:
+    plan seed_design { let d = designit(topic) return d }
+    plan main { let g = greet(topic) return g }
+}
+```
+"""
+    module = lower(parse_source(src))
+    result = run_agent(module, "GlobalBot", initial_beliefs={"topic": "x"})
+    assert "[arch]" in result  # injected into greet, which alone wouldn't trigger
+
+
+def test_checker_flags_undefined_trait_and_unknown_trigger_term():
+    from tessera.parser.module import parse_source
+    src = """---
+agent: Bad
+capabilities_requested: []
+---
+
+```tsr:traits
+trait wobbly {
+  trigger: frobnicate
+  behavior: "this term is not real"
+  priority: 0.5
+}
+```
+
+```tsr:agent
+agent Bad {
+  beliefs:
+    @w topic: String
+  traits: [wobbly, nonexistent_trait]
+  intentions:
+    plan p { return topic }
+}
+```
+"""
+    module = lower(parse_source(src))
+    diags = run_local(module)
+    errors = [d for d in diags if d.severity == "error" and d.code == "E300"]
+    warnings = [d for d in diags if d.severity == "warning" and d.code == "E301"]
+    assert any("nonexistent_trait" in d.message for d in errors)
+    assert any("frobnicate" in d.message for d in warnings)
+
+
+# ---------------- intent + audit ----------------
+
+AUDITABLE_ESTIMATOR = Path(__file__).parent.parent / "examples" / "auditable_estimator.t.md"
+
+
+def test_intent_parse_and_binding():
+    module = lower(parse_file(AUDITABLE_ESTIMATOR))
+    assert "produce_estimate" in module.intents
+    intent = module.intents["produce_estimate"]
+    assert intent.goal.startswith("Return a defensible")
+    assert intent.forbidden == ["NoPII"]
+    assert intent.success == ["estimate_has_line_items"]
+    # agent binds via `intends`, plan inherits via `serves`
+    assert module.agents["Estimator"].intent == "produce_estimate"
+    plan = next(r for r in module.regions if r.name == "plan:build_estimate")
+    assert plan.intent == "produce_estimate"
+
+
+def test_intent_forbidden_must_map_to_policy():
+    from tessera.parser.module import parse_source
+    src = """---
+agent: A
+capabilities_requested: []
+---
+
+```tsr:intent
+intent goal_x { goal: "do x" success: ok forbidden: [Ghost] }
+```
+
+```tsr:agent
+agent A intends goal_x {
+  beliefs:
+    @w t: String
+  intentions:
+    plan p serves goal_x { return t }
+}
+```
+"""
+    diags = run_local(lower(parse_source(src)))
+    assert any(d.code == "E400" and "Ghost" in d.message for d in diags)
+
+
+def test_intent_undeclared_reference_errors():
+    from tessera.parser.module import parse_source
+    src = """---
+agent: A
+capabilities_requested: []
+---
+
+```tsr:agent
+agent A intends nope {
+  beliefs:
+    @w t: String
+  intentions:
+    plan p { return t }
+}
+```
+"""
+    diags = run_local(lower(parse_source(src)))
+    assert any(d.code == "E402" and "nope" in d.message for d in diags)
+
+
+def test_audit_trace_stamps_actions_with_intent(monkeypatch, tmp_path):
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+    from tessera.interp.eval import World
+
+    module = lower(parse_file(AUDITABLE_ESTIMATOR))
+    world = World(module=module)
+    run_agent(module, "Estimator", initial_beliefs={"scope": "kitchen remodel"}, world=world)
+
+    actions = [e.action for e in world.audit]
+    assert any(a == "plan_enter:build_estimate" for a in actions)
+    prompt_events = [e for e in world.audit if e.action == "prompt:price"]
+    assert prompt_events, "expected a prompt:price audit event"
+    assert prompt_events[0].intent == "produce_estimate"  # action stamped with intent
+    assert prompt_events[0].plan == "build_estimate"
+
+
+def test_audit_records_policy_refusal(monkeypatch, tmp_path):
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
+    from tessera import cache as cmod
+    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
+    from tessera.adapters.llm import reset_cache
+    reset_cache()
+    from tessera.interp.eval import World
+
+    module = lower(parse_file(POLICY_DEMO))
+    world = World(module=module)
+    run_agent(module, "SafetyAssistant", initial_beliefs={"question": "my SSN is on file"}, world=world)
+    refusals = [e for e in world.audit if e.action == "refusal"]
+    assert refusals and refusals[0].detail.get("policy") == "NoPII"

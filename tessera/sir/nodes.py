@@ -155,6 +155,12 @@ class Region:
     nodes: list[Node] = field(default_factory=list)
     capabilities_in_scope: set[str] = field(default_factory=set)
     parent: str | None = None
+    # Cognitive traits attached to this region (agent regions only). Names are
+    # resolved against Module.traits (local) then BUILTIN_TRAITS at runtime.
+    trait_names: list[str] = field(default_factory=list)
+    # Intent this region serves (agent: `intends X`, plan: `serves X`). Plans
+    # inherit their agent's intent when they don't declare their own.
+    intent: str | None = None
 
     def add(self, node: Node) -> Node:
         self.nodes.append(node)
@@ -255,6 +261,39 @@ class SkillDecl:
 
 
 @dataclass
+class TraitDecl:
+    """A cognitive trait — a channeled reasoning posture injected into prompts.
+
+    Traits modify *how* an agent deliberates, not what it's allowed to do. A
+    trait fires when any of its trigger terms match the current context; when it
+    fires, its `behavior` text is injected as a preamble into the rendered
+    prompt. See `tessera/traits.py` for the deterministic firing engine and the
+    built-in trait registry.
+    """
+    name: str
+    trigger: list[str]              # OR-set of trigger terms (split on "|")
+    behavior: str                   # reasoning posture, injected into prompts
+    priority: float = 0.5           # 0.0–1.0; resolves order + conflicts
+    scope: str = "per_call"         # "per_call" | "per_plan" | "global"
+
+
+@dataclass
+class IntentDecl:
+    """A declared intent — what an agent (or plan) is *for*.
+
+    Intent is the thing you audit against: it states the goal, the checkable
+    success criteria, and the outcomes that must never happen. `forbidden`
+    entries name `tsr:policy` rules, binding purpose to enforcement so a stated
+    intent can't be declared without the guardrails that back it.
+    """
+    name: str
+    goal: str = ""
+    success: list[str] = field(default_factory=list)   # checkable predicates (raw text MVP)
+    forbidden: list[str] = field(default_factory=list)  # names of tsr:policy rules
+    why: str = ""                                        # human rationale, for the audit narrative
+
+
+@dataclass
 class Module:
     name: str
     regions: list[Region] = field(default_factory=list)
@@ -269,6 +308,8 @@ class Module:
     policies: dict[str, PolicyDecl] = field(default_factory=dict)
     eval_cases: list[EvalCaseDecl] = field(default_factory=list)
     skills: dict[str, SkillDecl] = field(default_factory=dict)
+    traits: dict[str, TraitDecl] = field(default_factory=dict)
+    intents: dict[str, IntentDecl] = field(default_factory=dict)
 
     def all_nodes(self):
         for r in self.regions:

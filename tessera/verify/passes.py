@@ -12,6 +12,7 @@ from ..sir.nodes import (
     AGENT_OPS, MEMORY_OPS, NEURAL_OPS, POLICY_OPS, PROMPT_OPS, PURE_OPS,
     TOOL_OPS, Module, Op,
 )
+from ..traits import KNOWN_TERMS, resolve_trait
 
 
 @dataclass(frozen=True)
@@ -107,10 +108,94 @@ def pass_2_effect_capability(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_3_trait_resolution(m: Module) -> list[Diagnostic]:
+    """Cognitive-trait checks.
+
+    E300 (error): an agent attaches a trait that resolves to neither a local
+    `tsr:traits` definition nor a built-in.
+    E301 (warning): a locally-defined trait names a trigger term outside the
+    known vocabulary — it can never fire (a likely typo).
+    """
+    diags: list[Diagnostic] = []
+    for r in m.regions:
+        for name in r.trait_names:
+            if resolve_trait(name, m) is None:
+                diags.append(Diagnostic(
+                    code="E300",
+                    severity="error",
+                    region=r.name,
+                    node="-",
+                    message=f"trait {name!r} not defined (no local or built-in trait)",
+                ))
+    for tname, decl in m.traits.items():
+        for term in decl.trigger:
+            if term not in KNOWN_TERMS:
+                diags.append(Diagnostic(
+                    code="E301",
+                    severity="warning",
+                    region=f"trait:{tname}",
+                    node="-",
+                    message=f"unknown trigger term {term!r} — it will never fire",
+                ))
+    return diags
+
+
+def pass_4_intent(m: Module) -> list[Diagnostic]:
+    """Intent checks — keep declared intent honest and auditable.
+
+    E400 (error): an intent forbids an outcome that maps to no `tsr:policy` —
+    purpose stated without the guardrail that backs it.
+    E402 (error): an agent/plan serves an intent that was never declared.
+    E403 (warning): a plan is bound to no intent (its actions can't be audited
+    against a purpose).
+    E404 (warning): a declared intent has no success criteria (nothing to audit
+    the outcome against).
+    """
+    diags: list[Diagnostic] = []
+    for iname, decl in m.intents.items():
+        for forb in decl.forbidden:
+            if forb not in m.policies:
+                diags.append(Diagnostic(
+                    code="E400",
+                    severity="error",
+                    region=f"intent:{iname}",
+                    node="-",
+                    message=f"forbids {forb!r} but no policy {forb!r} is declared",
+                ))
+        if not decl.success:
+            diags.append(Diagnostic(
+                code="E404",
+                severity="warning",
+                region=f"intent:{iname}",
+                node="-",
+                message="intent has no success criteria — its outcome cannot be audited",
+            ))
+    for r in m.regions:
+        if r.intent is not None and r.intent not in m.intents:
+            diags.append(Diagnostic(
+                code="E402",
+                severity="error",
+                region=r.name,
+                node="-",
+                message=f"serves undeclared intent {r.intent!r}",
+            ))
+        elif r.name.startswith("plan:") and r.intent is None and m.intents:
+            diags.append(Diagnostic(
+                code="E403",
+                severity="warning",
+                region=r.name,
+                node="-",
+                message="plan is bound to no intent — its actions can't be audited against a purpose",
+            ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
         *pass_2_effect_capability(m),
+        *pass_3_trait_resolution(m),
+        *pass_4_intent(m),
     ]
 
 

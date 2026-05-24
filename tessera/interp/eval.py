@@ -1,6 +1,6 @@
 """Tree-walking SIR interpreter (RFC §10).
 
-MVP scope: enough to execute hello.tsr.md AND researcher.tsr.md end-to-end.
+MVP scope: enough to execute hello.t.md AND researcher.t.md end-to-end.
 
 Concurrency model: synchronous round-robin actor scheduler. When TeamLead does
 `recv from researcher`, we deterministically run Researcher's next plan step
@@ -21,7 +21,8 @@ from typing import Any, Callable
 
 import re as _re
 
-from ..sir.nodes import Module, Node, Op, PolicyDecl, Region, WorkspaceDecl
+from ..sir.nodes import Module, Node, Op, PolicyDecl, Region, TraitDecl, WorkspaceDecl
+from ..traits import TriggerContext, fire_traits, resolve_trait, trait_preamble
 
 
 @dataclass
@@ -80,6 +81,36 @@ def _check_policies(module: Module, value: object) -> Refusal | None:
 
 
 @dataclass
+class PlanFrame:
+    """One entry on an agent's runtime plan stack."""
+    name: str
+    traits: list[TraitDecl] = field(default_factory=list)
+    intent: str | None = None
+
+
+@dataclass
+class AuditEvent:
+    """One audited runtime action, stamped with the intent it served.
+
+    The audit trace is the answer to 'what did this agent actually do, and
+    why' — every action carries the plan and intent active when it fired, the
+    capabilities it exercised, and the traits that shaped it.
+    """
+    seq: int
+    agent: str | None
+    plan: str | None
+    intent: str | None
+    action: str               # e.g. "prompt:assess", "tool:web_search", "spawn:Critic", "refusal"
+    detail: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "seq": self.seq, "agent": self.agent, "plan": self.plan,
+            "intent": self.intent, "action": self.action, **self.detail,
+        }
+
+
+@dataclass
 class AgentState:
     """Per-agent working memory, mailbox, capability set, declared beliefs."""
     name: str
@@ -99,6 +130,21 @@ class AgentState:
     last_result: Any = None                    # most recent plan return value
     mailbox_signal: Event = field(default_factory=Event)
     state_lock: Lock = field(default_factory=Lock)
+    # Cognitive traits, resolved once per agent (see _ensure_traits_resolved).
+    traits_resolved: bool = False
+    per_call_traits: list[TraitDecl] = field(default_factory=list)
+    per_plan_trait_defs: list[TraitDecl] = field(default_factory=list)
+    global_traits: list[TraitDecl] = field(default_factory=list)   # fired global-scope
+    # Runtime plan stack of PlanFrames (name + active per_plan traits + intent).
+    plan_stack: list[PlanFrame] = field(default_factory=list)
+
+    @property
+    def active_plan_traits(self) -> list[TraitDecl]:
+        return self.plan_stack[-1].traits if self.plan_stack else []
+
+    @property
+    def active_plan(self) -> PlanFrame | None:
+        return self.plan_stack[-1] if self.plan_stack else None
 
 
 @dataclass
@@ -141,6 +187,27 @@ class World:
     # via run_agent(... concurrent=True) or TESSERA_CONCURRENT_AGENTS=1.
     executor: ThreadPoolExecutor | None = None
     concurrent: bool = False
+    # Append-only audit trace: every meaningful runtime action, stamped with the
+    # active plan + intent. Exported via `tessera compile --run X --audit out`.
+    audit: list[AuditEvent] = field(default_factory=list)
+    _audit_seq: int = 0
+
+    def record(self, agent_name: str | None, action: str, **detail) -> None:
+        st = self.agents.get(agent_name) if agent_name else None
+        frame = st.active_plan if st else None
+        # Outside a plan, fall back to the agent's declared top-level intent.
+        intent = frame.intent if frame else None
+        if intent is None and agent_name and agent_name in self.module.agents:
+            intent = self.module.agents[agent_name].intent
+        self._audit_seq += 1
+        self.audit.append(AuditEvent(
+            seq=self._audit_seq,
+            agent=agent_name,
+            plan=frame.name if frame else None,
+            intent=intent,
+            action=action,
+            detail=detail,
+        ))
 
     def ensure_workspace(self, name: str) -> WorkspaceState:
         if name not in self.workspaces:
@@ -304,17 +371,21 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         # 2. Prompt template → LLM call
         prompt = world.module.prompts.get(callee_name)
         if prompt is not None:
-            return _call_prompt(prompt, arg_vals, world)
+            return _call_prompt(prompt, arg_vals, world, agent_name)
 
         # 3. External tool (LangChain or bare python callable)
         tool = world.module.tools.get(callee_name)
         if tool is not None:
-            return _invoke_tool(tool, arg_vals, world)
+            res = _invoke_tool(tool, arg_vals, world)
+            world.record(agent_name, f"tool:{callee_name}")
+            return res
 
         # 4. Neural model — torch forward
         model = world.module.neural_models.get(callee_name)
         if model is not None:
-            return _forward_model(model, arg_vals, world)
+            res = _forward_model(model, arg_vals, world)
+            world.record(agent_name, f"model:{callee_name}")
+            return res
 
         # 5. Procedural skill — named indirection over any of the above
         skill = world.module.skills.get(callee_name)
@@ -343,6 +414,8 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         refusal = _check_policies(world.module, val)
         if refusal is not None:
             val = refusal
+            world.record(agent_name, "refusal", policy=refusal.policy,
+                         reason=refusal.reason, belief=name)
         if agent_name is not None:
             world.state_for(agent_name).working_memory[name] = val
             _check_notices(world, agent_name)
@@ -363,7 +436,26 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         if plan_region is None:
             raise RuntimeError_(f"plan region {plan_region_id} missing")
         owner = region.name.removeprefix("agent:")
-        return eval_region(plan_region, world, agent_name=owner)
+        plan_name = n.attributes.get("plan", "")
+        _ensure_traits_resolved(world, owner)
+        state = world.state_for(owner)
+        # per_plan traits: evaluate the trigger ONCE at plan entry against the
+        # plan's static prompt templates; if fired, active for every call below.
+        active: list[TraitDecl] = []
+        if state.per_plan_trait_defs:
+            ctx = TriggerContext(
+                text="\n".join(_static_prompt_templates(plan_region, world.module)),
+                plan_name=plan_name,
+                capabilities=frozenset(state.capabilities),
+            )
+            active = fire_traits(state.per_plan_trait_defs, ctx)
+        state.plan_stack.append(PlanFrame(name=plan_name, traits=active,
+                                          intent=plan_region.intent))
+        world.record(owner, f"plan_enter:{plan_name}", intent_served=plan_region.intent)
+        try:
+            return eval_region(plan_region, world, agent_name=owner)
+        finally:
+            state.plan_stack.pop()
 
     if op is Op.Spawn:
         target_name = n.attributes.get("agent")
@@ -379,6 +471,7 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         child = world.state_for(target_name)
         child.capabilities |= requested_caps
         world.spawn_log.append(f"{agent_name or '<root>'} -> {target_name} with {sorted(requested_caps)}")
+        world.record(agent_name, f"spawn:{target_name}", caps_granted=sorted(requested_caps))
         return f"<agent:{target_name}>"
 
     if op is Op.Send:
@@ -556,6 +649,7 @@ def _run_child_and_collect(world: World, target_name: str) -> Any:
     region = world.module.agents.get(target_name)
     if region is None:
         raise RuntimeError_(f"agent {target_name!r} not declared in module")
+    _ensure_traits_resolved(world, target_name)
     eval_region(region, world, agent_name=target_name)
     child.has_run = True
     # The intention's plan stored its return value in region_results.
@@ -569,10 +663,72 @@ def _run_child_and_collect(world: World, target_name: str) -> Any:
     return last_value
 
 
+# ----- cognitive traits -----------------------------------------------------
+
+
+def _static_prompt_templates(plan_region: Region, module: Module) -> list[str]:
+    """Templates of prompts a plan calls — context for per_plan/global triggers.
+
+    Catches direct prompt calls and prompt-bound skills. Prompts reached only
+    through nested fn/until bodies are not enumerated here (a documented v1
+    limitation); per_plan triggers still fire via plan_name / capabilities.
+    """
+    out: list[str] = []
+    for n in plan_region.nodes:
+        if n.op is not Op.Apply:
+            continue
+        callee = n.attributes.get("callee")
+        if not callee:
+            continue
+        pd = module.prompts.get(callee)
+        if pd is not None:
+            out.append(pd.template)
+            continue
+        sk = module.skills.get(callee)
+        if sk is not None and sk.binds_to_kind == "prompt":
+            spd = module.prompts.get(sk.binds_to_name)
+            if spd is not None:
+                out.append(spd.template)
+    return out
+
+
+def _ensure_traits_resolved(world: World, agent_name: str) -> None:
+    """Resolve an agent's attached traits once: partition by scope and fire the
+    global-scope ones against the agent's whole-program context."""
+    state = world.state_for(agent_name)
+    if state.traits_resolved:
+        return
+    state.traits_resolved = True
+    region = world.module.agents.get(agent_name)
+    if region is None or not region.trait_names:
+        return
+    resolved = [resolve_trait(name, world.module) for name in region.trait_names]
+    resolved = [t for t in resolved if t is not None]
+    state.per_call_traits = [t for t in resolved if t.scope == "per_call"]
+    state.per_plan_trait_defs = [t for t in resolved if t.scope == "per_plan"]
+    global_defs = [t for t in resolved if t.scope == "global"]
+    if global_defs:
+        plan_names: list[str] = []
+        templates: list[str] = []
+        for n in region.nodes:
+            if n.op is Op.IntentionCommit:
+                plan_names.append(n.attributes.get("plan", ""))
+                pr_id = n.attributes.get("region")
+                pr = next((r for r in world.module.regions if r.id == pr_id), None)
+                if pr is not None:
+                    templates.extend(_static_prompt_templates(pr, world.module))
+        ctx = TriggerContext(
+            text="\n".join(templates),
+            plan_name=" ".join(plan_names),
+            capabilities=frozenset(state.capabilities),
+        )
+        state.global_traits = fire_traits(global_defs, ctx)
+
+
 # ----- prompt / tool / neural dispatchers ----------------------------------
 
 
-def _call_prompt(prompt, arg_vals, world) -> Any:
+def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     from ..adapters.llm import get_backend
     from ..cache import semantic_cache_lookup, semantic_cache_put
 
@@ -581,11 +737,31 @@ def _call_prompt(prompt, arg_vals, world) -> Any:
     for k, v in bindings.items():
         rendered = rendered.replace("{" + k + "}", str(v))
 
+    # Inject the cognitive-trait preamble BEFORE the cache lookup: a trait-shaped
+    # prompt is a genuinely different request and should cache separately.
+    fired_names: list[str] = []
+    if agent_name is not None:
+        state = world.state_for(agent_name)
+        ctx = TriggerContext(
+            text=rendered,
+            plan_name=(state.active_plan.name if state.active_plan else ""),
+            capabilities=frozenset(state.capabilities),
+            params=bindings,
+        )
+        fired = list(state.global_traits) + list(state.active_plan_traits) \
+            + fire_traits(state.per_call_traits, ctx)
+        fired_names = [t.name for t in fired]
+        preamble = trait_preamble(fired)
+        if preamble:
+            rendered = preamble + rendered
+
     # Semantic cache — short-circuit if a near-identical prompt has been seen.
     cached = semantic_cache_lookup(rendered)
     if cached is not None:
         world.region_results.setdefault("_semantic_cache_hits", 0)
         world.region_results["_semantic_cache_hits"] += 1
+        world.record(agent_name, f"prompt:{prompt.name}",
+                     traits_fired=fired_names, cost=0.0, cached=True)
         return cached["text"]
 
     backend = get_backend()
@@ -593,6 +769,8 @@ def _call_prompt(prompt, arg_vals, world) -> Any:
     world.region_results.setdefault("_prompt_cost", 0.0)
     world.region_results["_prompt_cost"] += result.cost_dollars
     semantic_cache_put(rendered, result.text, backend=result.backend, model=result.model)
+    world.record(agent_name, f"prompt:{prompt.name}",
+                 traits_fired=fired_names, cost=result.cost_dollars, cached=False)
     return result.text
 
 
@@ -609,6 +787,8 @@ def _forward_model(model_decl, arg_vals, world) -> Any:
 
 def _invoke_skill(skill, arg_vals, world, agent_name):
     """Dispatch a procedural skill to its underlying callable + track stats."""
+    world.record(agent_name, f"skill:{skill.name}",
+                 binds_to=f"{skill.binds_to_kind}:{skill.binds_to_name}")
     stats = world.region_results.setdefault("_skill_stats", {})
     counter = stats.setdefault(skill.name, {"calls": 0, "kind": skill.binds_to_kind,
                                             "target": skill.binds_to_name})
@@ -631,7 +811,7 @@ def _invoke_skill(skill, arg_vals, world, agent_name):
         decl = world.module.prompts.get(name)
         if decl is None:
             raise RuntimeError_(f"skill {skill.name!r} binds to prompt {name!r}, not defined")
-        result = _call_prompt(decl, arg_vals, world)
+        result = _call_prompt(decl, arg_vals, world, agent_name)
     elif kind == "tool":
         decl = world.module.tools.get(name)
         if decl is None:
@@ -652,12 +832,16 @@ def _invoke_skill(skill, arg_vals, world, agent_name):
 def run_agent(module: Module, agent_name: str, initial_beliefs: dict[str, Any] | None = None,
               initial_capabilities: set[str] | None = None,
               concurrent: bool | None = None,
-              max_workers: int = 8) -> Any:
+              max_workers: int = 8,
+              world: "World | None" = None) -> Any:
     """Run an agent.
 
     concurrent=True spins up a ThreadPoolExecutor so spawned children run
     in parallel. Defaults to env var TESSERA_CONCURRENT_AGENTS (1/true/on)
     or False if unset.
+
+    Pass an existing `world` to retain a reference after the run — e.g. to read
+    `world.audit` for the audit trace. When None, a fresh World is created.
     """
     import os as _os
     region = module.agents.get(agent_name)
@@ -667,8 +851,9 @@ def run_agent(module: Module, agent_name: str, initial_beliefs: dict[str, Any] |
     if concurrent is None:
         concurrent = _os.environ.get("TESSERA_CONCURRENT_AGENTS", "").lower() in {"1", "true", "on"}
 
-    world = World(module=module, concurrent=concurrent)
-    if concurrent:
+    if world is None:
+        world = World(module=module, concurrent=concurrent)
+    if concurrent and world.executor is None:
         world.executor = ThreadPoolExecutor(max_workers=max_workers,
                                             thread_name_prefix="tessera-agent")
     try:
@@ -678,6 +863,7 @@ def run_agent(module: Module, agent_name: str, initial_beliefs: dict[str, Any] |
         state.capabilities |= region.capabilities_in_scope
         if initial_capabilities:
             state.capabilities |= initial_capabilities
+        _ensure_traits_resolved(world, agent_name)
         return eval_region(region, world, agent_name=agent_name)
     finally:
         if world.executor is not None:
