@@ -41,7 +41,7 @@ from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
-    BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
+    ASTDecl, BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
     CausalDAGDecl, EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
     TraitDecl, WorkspaceDecl,
 )
@@ -1216,6 +1216,32 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_AST_HEAD_RE = re.compile(r"ast\s*\{")
+_AST_FIDELITY_RE = re.compile(r"min_fidelity\s*:\s*([0-9.]+)")
+_AST_REFUSE_RE = re.compile(r"refuse_below_threshold\s*:\s*(true|false)")
+
+
+def _lower_ast(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _AST_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `ast { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = ASTDecl()
+    fm = _AST_FIDELITY_RE.search(body)
+    if fm:
+        decl.min_fidelity = float(fm.group(1))
+        if not (0.0 <= decl.min_fidelity <= 1.0):
+            raise SyntaxFail(
+                f"ast: min_fidelity must be in [0, 1] (got {decl.min_fidelity})"
+            )
+    rm = _AST_REFUSE_RE.search(body)
+    if rm:
+        decl.refuse_below_threshold = (rm.group(1) == "true")
+    mod.ast = decl
+
+
 _BAYES_HEAD_RE = re.compile(r"bayesian\s*\{")
 # var name: [v1, v2, ...] prior [p1, p2, ...]
 _BAYES_VAR_RE = re.compile(
@@ -1476,6 +1502,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_causal(block, mod)
         elif block.substrate == "bayesian":
             _lower_bayesian(block, mod)
+        elif block.substrate == "ast":
+            _lower_ast(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

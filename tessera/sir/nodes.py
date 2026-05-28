@@ -374,6 +374,26 @@ class AutonomyDecl:
 
 
 @dataclass
+class ASTDecl:
+    """Attention Schema Theory substrate config (research C2).
+
+    Reference: Graziano (2013, 2019); Graziano et al. (2020).
+
+    `min_fidelity` is the threshold below which the agent refuses to
+    introspect. Tracks fraction of past (reported_focus, actual_focus)
+    pairs that matched. `refuse_below_threshold` toggles the refusal —
+    when false, the agent still introspects but the fidelity score is
+    audit-emitted so a downstream evaluator can decide.
+
+    The substrate ships the MEASURE. It does NOT claim that maintaining
+    an attention schema produces subjective experience (per Chalmers'
+    hard problem, that question is left to philosophy).
+    """
+    min_fidelity: float = 0.7
+    refuse_below_threshold: bool = True
+
+
+@dataclass
 class BayesianVarSpec:
     """One discrete random variable in a tsr:bayesian block.
 
@@ -471,6 +491,7 @@ class Module:
     metacognition: "MetacognitionDecl | None" = None
     causal_dags: dict[str, "CausalDAGDecl"] = field(default_factory=dict)
     bayesian: "BayesianDeclSIR | None" = None
+    ast: "ASTDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:
