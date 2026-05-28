@@ -359,6 +359,21 @@ class AutonomyDecl:
 
 
 @dataclass
+class CausalDAGDecl:
+    """Declared causal DAG (research substrate D1).
+
+    Reference: Pearl (2009). Causality: Models, Reasoning, and Inference.
+
+    `variables` is the node set, `edges` is the directed edge list
+    (parent, child). Compile-time checks: no cycles, no edges referencing
+    undeclared variables.
+    """
+    name: str
+    variables: list[str] = field(default_factory=list)
+    edges: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
 class MetacognitionDecl:
     """Calibration / metacognition substrate config (research substrate A1).
 
@@ -411,6 +426,7 @@ class Module:
     autonomy: "AutonomyDecl | None" = None
     evolve: "EvolveDecl | None" = None
     metacognition: "MetacognitionDecl | None" = None
+    causal_dags: dict[str, "CausalDAGDecl"] = field(default_factory=dict)
 
     def all_nodes(self):
         for r in self.regions:

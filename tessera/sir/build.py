@@ -41,7 +41,7 @@ from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
-    EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
+    CausalDAGDecl, EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
     TraitDecl, WorkspaceDecl,
 )
 
@@ -1210,6 +1210,39 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_CAUSAL_HEAD_RE = re.compile(r"causal\s+(\w+)\s*\{")
+_CAUSAL_VAR_RE = re.compile(r"var\s+(\w+)\s*:\s*\w+")
+_CAUSAL_EDGE_RE = re.compile(r"edge\s+(\w+)\s*->\s*(\w+)")
+
+
+def _lower_causal(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _CAUSAL_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `causal Name { ... }`")
+    name = m.group(1)
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    variables = [vm.group(1) for vm in _CAUSAL_VAR_RE.finditer(body)]
+    edges = [(em.group(1), em.group(2)) for em in _CAUSAL_EDGE_RE.finditer(body)]
+    # Verify every edge references declared variables
+    declared = set(variables)
+    for p, c in edges:
+        if p not in declared or c not in declared:
+            raise SyntaxFail(
+                f"causal DAG {name!r}: edge {p}->{c} references undeclared var"
+            )
+    decl = CausalDAGDecl(name=name, variables=variables, edges=edges)
+    # Cycle check — a directed cycle violates the DAG promise (Pearl 2009 §1.2).
+    from ..causal import CausalDAG as _RuntimeDAG
+    runtime_view = _RuntimeDAG(name=name, variables=variables, edges=edges)
+    if runtime_view.has_cycle():
+        raise SyntaxFail(
+            f"causal DAG {name!r} has a cycle — DAGs must be acyclic (Pearl 2009 §1.2)"
+        )
+    mod.causal_dags[name] = decl
+
+
 _METACOG_HEAD_RE = re.compile(r"metacognition\s*\{")
 _METACOG_TEMP_RE = re.compile(r"temperature\s*:\s*([0-9.]+)")
 _METACOG_BINS_RE = re.compile(r"n_bins\s*:\s*(\d+)")
@@ -1374,6 +1407,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_evolve(block, mod)
         elif block.substrate == "metacognition":
             _lower_metacognition(block, mod)
+        elif block.substrate == "causal":
+            _lower_causal(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":
