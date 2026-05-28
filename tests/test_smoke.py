@@ -473,9 +473,6 @@ agent B {
 
 
 def test_policy_constraint_forbid_when_contains_pii():
-
-
-def test_policy_constraint_forbid_when_contains_pii():
     """A policy `forbid when contains_pii(value)` refuses a value with PII."""
     from tessera.parser.module import parse_source
     src = """---
