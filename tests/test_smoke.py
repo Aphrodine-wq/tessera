@@ -428,6 +428,44 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_complaint_router_full_governance_stack():
+    """The complaint_router example wires intent + ethics + autonomy +
+    traits + capabilities into one agent. Smoke: parses, lowers, runs
+    under noop; audit captures intent_served + ethics_applied."""
+    from tessera.adapters.audit import query_events
+    COMPLAINT = Path(__file__).parent.parent / "examples" / "complaint_router.t.md"
+    pm = parse_file(COMPLAINT)
+    module = lower(pm)
+    assert "route_fairly" in module.intents
+    assert module.ethics is not None
+    assert module.autonomy is not None
+    run_agent(module, "ComplaintRouter",
+              initial_beliefs={"complaint": "The crew never showed but earlier you said they would"})
+    rows = query_events(agent="ComplaintRouter", intent="route_fairly")
+    assert rows, "expected audit events bound to intent route_fairly"
+    # At least one prompt action should record ethics_applied with both principles
+    prompt_rows = [r for r in rows if r["action"].startswith("prompt")]
+    assert prompt_rows, "expected at least one prompt action in audit"
+    ethics = set(prompt_rows[0].get("ethics_applied") or [])
+    assert "homeowner_trust" in ethics
+    assert "no_silent_data_loss" in ethics
+
+
+def test_summarizer_with_promotion_example_runs():
+    """The summarizer_with_promotion example calls its skill 4 times and
+    the runtime emits exactly one skill_promotion_pending event."""
+    from tessera.adapters.audit import query_events
+    SUMM = Path(__file__).parent.parent / "examples" / "summarizer_with_promotion.t.md"
+    pm = parse_file(SUMM)
+    module = lower(pm)
+    assert module.skills["summarize"].promote_to == "neural"
+    assert module.skills["summarize"].promote_threshold == 3
+    run_agent(module, "Summarizer", initial_beliefs={"article": "lorem ipsum"})
+    rows = query_events(action="skill_promotion_pending")
+    assert len(rows) == 1
+    assert rows[0]["skill_name"] == "summarize"
+
+
 def test_skill_promote_to_neural_emits_pending_event():
     """A skill declared `promote_to: neural { threshold: 3 }` fires a
     skill_promotion_pending audit event on its 3rd call (and only once)."""
