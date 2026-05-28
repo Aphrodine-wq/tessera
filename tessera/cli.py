@@ -18,7 +18,8 @@ from .verify.passes import run_local
 
 def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = False,
                  run: str | None = None,
-                 sets: list[str] | None = None, audit: str | None = None) -> int:
+                 sets: list[str] | None = None, audit: str | None = None,
+                 sequential: bool = False) -> int:
     pm = parse_file(file)
     module = lower(pm)
     sir_text = emit_module(module)
@@ -41,8 +42,9 @@ def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = Fal
     if run:
         from .interp.eval import World
         beliefs = dict(kv.split("=", 1) for kv in (sets or []))
-        world = World(module=module)
-        result = run_agent(module, run, initial_beliefs=beliefs, world=world)
+        world = World(module=module, concurrent=not sequential)
+        result = run_agent(module, run, initial_beliefs=beliefs, world=world,
+                           concurrent=not sequential)
         print(f"\n{run}() = {result!r}")
         if audit:
             import json
@@ -61,6 +63,7 @@ def _cmd_compile(args: argparse.Namespace) -> int:
         run=args.run,
         sets=args.set,
         audit=args.audit,
+        sequential=args.sequential,
     )
 
 
@@ -225,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     cp.add_argument("file")
     cp.add_argument("--emit-sir", metavar="OUT")
     cp.add_argument("--aeon", action="store_true")
+    cp.add_argument("--sequential", action="store_true",
+                    help="Disable concurrent actor scheduling (default is concurrent)")
     cp.add_argument("--run", metavar="AGENT")
     cp.add_argument("--set", action="append")
     cp.add_argument("--audit", metavar="OUT", help="write the run's audit trace as JSONL")

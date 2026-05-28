@@ -220,11 +220,12 @@ class World:
     workspaces: dict[str, WorkspaceState] = field(default_factory=dict)
     region_results: dict[str, Any] = field(default_factory=dict)
     spawn_log: list[str] = field(default_factory=list)
-    # Concurrent actor scheduler. None means we run synchronously (sequential
-    # legacy behavior). Created on first spawn when concurrent=True is asked
-    # via run_agent(... concurrent=True) or TESSERA_CONCURRENT_AGENTS=1.
+    # Concurrent actor scheduler. None executor means synchronous within a
+    # single agent's plan; spawned children still run concurrently when the
+    # `concurrent` flag is True (the runtime default per decision 3).
+    # Opt out via TESSERA_CONCURRENT_AGENTS=0 or concurrent=False.
     executor: ThreadPoolExecutor | None = None
-    concurrent: bool = False
+    concurrent: bool = True
     # Append-only audit trace: every meaningful runtime action, stamped with the
     # active plan + intent. Exported via `tessera compile --run X --audit out`.
     audit: list[AuditEvent] = field(default_factory=list)
@@ -943,8 +944,9 @@ def run_agent(module: Module, agent_name: str, initial_beliefs: dict[str, Any] |
     """Run an agent.
 
     concurrent=True spins up a ThreadPoolExecutor so spawned children run
-    in parallel. Defaults to env var TESSERA_CONCURRENT_AGENTS (1/true/on)
-    or False if unset.
+    in parallel. **Default is now True (decision 3).** Multi-agent BDI is
+    the language's core value prop, so the runtime should reflect that.
+    Opt out via TESSERA_CONCURRENT_AGENTS=0 or concurrent=False explicitly.
 
     Pass an existing `world` to retain a reference after the run — e.g. to read
     `world.audit` for the audit trace. When None, a fresh World is created.
@@ -955,7 +957,9 @@ def run_agent(module: Module, agent_name: str, initial_beliefs: dict[str, Any] |
         raise RuntimeError_(f"agent {agent_name!r} not found in module")
 
     if concurrent is None:
-        concurrent = _os.environ.get("TESSERA_CONCURRENT_AGENTS", "").lower() in {"1", "true", "on"}
+        # Default ON; opt out via TESSERA_CONCURRENT_AGENTS in {0, false, off}.
+        env = _os.environ.get("TESSERA_CONCURRENT_AGENTS", "1").lower()
+        concurrent = env not in {"0", "false", "off", "no"}
 
     if world is None:
         world = World(module=module, concurrent=concurrent)
