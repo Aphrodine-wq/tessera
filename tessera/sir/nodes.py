@@ -359,6 +359,22 @@ class AutonomyDecl:
 
 
 @dataclass
+class MetacognitionDecl:
+    """Calibration / metacognition substrate config (research substrate A1).
+
+    Reference: Guo, Pleiss, Sun, Weinberger (2017). On Calibration of Modern
+    Neural Networks. ICML.
+
+    `temperature` is the scalar T applied to logits before softmax. T=1.0 means
+    no scaling. `track_ece` toggles ECE-on-audit emission per plan_enter.
+    `n_bins` controls binning granularity for the ECE estimator.
+    """
+    temperature: float = 1.0
+    n_bins: int = 15
+    track_ece: bool = True
+
+
+@dataclass
 class EvolveDecl:
     """A genetic evolution declaration (decision 17).
 
@@ -394,6 +410,7 @@ class Module:
     ethics: "EthicsDecl | None" = None
     autonomy: "AutonomyDecl | None" = None
     evolve: "EvolveDecl | None" = None
+    metacognition: "MetacognitionDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:

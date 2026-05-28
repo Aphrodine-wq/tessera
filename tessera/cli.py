@@ -215,6 +215,77 @@ def _cmd_audit_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    """Run an agent against its eval cases, fit a temperature, report ECE."""
+    pm = parse_file(args.file)
+    module = lower(pm)
+    if module.metacognition is None:
+        print(f"no tsr:metacognition block in {args.file}")
+        return 1
+    if not module.eval_cases:
+        print(f"no eval cases in {args.file} — need cases to calibrate against")
+        return 1
+
+    # MVP calibration: for each eval case, run the target agent and treat the
+    # output as a binary correct/incorrect against the case's expected output.
+    # Per-sample "logit" is a 2-class synthetic vector — confidence proxied by
+    # 1.0 on the chosen class. Real per-token logits arrive when LLM backends
+    # surface them; this MVP exercises the math + audit emission.
+    target = args.agent or next(iter(module.agents.keys()), None)
+    if not target:
+        print(f"no agent in {args.file}")
+        return 1
+
+    logits_list: list[list[float]] = []
+    labels: list[int] = []
+    from .interp.eval import run_agent, Refusal
+    for case in module.eval_cases:
+        try:
+            result = run_agent(module, target, initial_beliefs=case.inputs,
+                               concurrent=False)
+        except Exception:
+            result = None
+        ok = False
+        if isinstance(result, Refusal):
+            ok = bool(case.expect_refusal)
+        else:
+            ok = True
+            if case.expect_contains is not None:
+                ok = ok and (isinstance(result, str) and case.expect_contains in result)
+            if case.expect_equals is not None:
+                ok = ok and (result == case.expect_equals)
+        # 2-class: class 0 = wrong, class 1 = right. The agent always "picks"
+        # class 1 (it answered confidently). The label is whether class 1 was
+        # actually correct.
+        logits_list.append([0.0, 3.0])  # confident-correct guess
+        labels.append(1 if ok else 0)
+
+    from .calibration import calibrate
+    report = calibrate(logits_list, labels, n_bins=module.metacognition.n_bins)
+
+    # Emit a governance audit event so the calibration history is queryable.
+    from .adapters.audit import record_event
+    record_event({
+        "seq": 0,
+        "agent": target,
+        "plan": None,
+        "intent": None,
+        "action": "calibration:ece",
+        "ece_before": report.ece_before,
+        "ece_after": report.ece_after,
+        "temperature": report.temperature,
+        "n_samples": report.n_samples,
+        "n_bins": report.n_bins,
+    })
+
+    print(f"calibration report for {target}")
+    print(f"  n_samples:     {report.n_samples}")
+    print(f"  ECE before:    {report.ece_before:.4f}")
+    print(f"  ECE after:     {report.ece_after:.4f}")
+    print(f"  temperature:   {report.temperature:.4f}")
+    return 0
+
+
 def _cmd_evolve(args: argparse.Namespace) -> int:
     pm = parse_file(args.file)
     module = lower(pm)
@@ -342,6 +413,13 @@ def main(argv: list[str] | None = None) -> int:
     ev = sub.add_parser("evolve", help="Run the tsr:evolve block in a file")
     ev.add_argument("file")
     ev.set_defaults(fn=_cmd_evolve)
+
+    # calibrate
+    cb = sub.add_parser("calibrate",
+                        help="Fit a temperature scaler against the file's eval cases (research substrate A1)")
+    cb.add_argument("file")
+    cb.add_argument("--agent", help="Target agent (default: first declared)")
+    cb.set_defaults(fn=_cmd_calibrate)
 
     # version
     verp = sub.add_parser("version")

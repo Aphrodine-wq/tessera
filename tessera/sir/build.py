@@ -41,7 +41,7 @@ from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
-    EvolveDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
+    EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
     TraitDecl, WorkspaceDecl,
 )
 
@@ -1210,6 +1210,32 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_METACOG_HEAD_RE = re.compile(r"metacognition\s*\{")
+_METACOG_TEMP_RE = re.compile(r"temperature\s*:\s*([0-9.]+)")
+_METACOG_BINS_RE = re.compile(r"n_bins\s*:\s*(\d+)")
+_METACOG_TRACK_RE = re.compile(r"track_ece\s*:\s*(true|false)")
+
+
+def _lower_metacognition(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _METACOG_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `metacognition { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = MetacognitionDecl()
+    tm = _METACOG_TEMP_RE.search(body)
+    if tm:
+        decl.temperature = float(tm.group(1))
+    bm = _METACOG_BINS_RE.search(body)
+    if bm:
+        decl.n_bins = int(bm.group(1))
+    km = _METACOG_TRACK_RE.search(body)
+    if km:
+        decl.track_ece = (km.group(1) == "true")
+    mod.metacognition = decl
+
+
 _EVOLVE_HEAD_RE = re.compile(r"evolve\s+(\w+)\s*\{")
 _EVOLVE_POP_RE = re.compile(r"population\s*:\s*(\d+)")
 _EVOLVE_GENS_RE = re.compile(r"generations\s*:\s*(\d+)")
@@ -1346,6 +1372,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_autonomy(block, mod)
         elif block.substrate == "evolve":
             _lower_evolve(block, mod)
+        elif block.substrate == "metacognition":
+            _lower_metacognition(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":
