@@ -47,13 +47,28 @@ class Refusal:
         return False
 
 
-def _check_policies(module: Module, value: object) -> Refusal | None:
-    """Apply all module-declared policies to a value. Returns Refusal on deny."""
+def _check_policies(
+    module: Module,
+    value: object,
+    *,
+    action: str = "",
+    agent: str | None = None,
+    intent: str | None = None,
+    capabilities: frozenset[str] | None = None,
+) -> Refusal | None:
+    """Apply all module-declared policies to a value. Returns Refusal on deny.
+
+    The substring-form rules (forbid_contains / forbid_match / require_contains)
+    walk the stringified value. The constraint-logic forms (forbid_when /
+    permit_when) evaluate an AST against an ActionContext built from the
+    caller-supplied agent / intent / capabilities + the value.
+    """
     if not module.policies:
         return None
     if value is None:
         return None
     s = value if isinstance(value, str) else str(value)
+    ctx = None  # built lazily; only constraint rules need it
     for pol_name, pol in module.policies.items():
         for kind, params in pol.rules:
             if kind == "forbid_contains":
@@ -75,6 +90,33 @@ def _check_policies(module: Module, value: object) -> Refusal | None:
                 if needle and needle not in s:
                     return Refusal(
                         reason=f"missing required substring {needle!r}",
+                        policy=pol_name,
+                    )
+            elif kind in ("forbid_when", "permit_when"):
+                if ctx is None:
+                    from ..policy_lang import ActionContext
+                    ctx = ActionContext(
+                        value=value,
+                        action=action,
+                        agent=agent,
+                        intent=intent,
+                        capabilities=capabilities or frozenset(),
+                    )
+                try:
+                    result = bool(params["expr"].eval(ctx))
+                except Exception as e:
+                    return Refusal(
+                        reason=f"policy expression error: {e}",
+                        policy=pol_name,
+                    )
+                if kind == "forbid_when" and result:
+                    return Refusal(
+                        reason=f"forbid when {params.get('src', '<expr>')}",
+                        policy=pol_name,
+                    )
+                if kind == "permit_when" and not result:
+                    return Refusal(
+                        reason=f"not permitted (predicate {params.get('src', '<expr>')} was false)",
                         policy=pol_name,
                     )
     return None
@@ -416,7 +458,19 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         val = values[n.inputs[0]]
         # Policy gate at plan-step boundary: if the value being written
         # violates a declared policy, replace it with a Refusal.
-        refusal = _check_policies(world.module, val)
+        caps_ = frozenset(world.state_for(agent_name).capabilities) if agent_name else frozenset()
+        intent_ = None
+        if agent_name and agent_name in world.module.agents:
+            st_ = world.state_for(agent_name)
+            frame_ = st_.active_plan if st_ else None
+            intent_ = (frame_.intent if frame_ else None) or world.module.agents.get(agent_name).intent
+        refusal = _check_policies(
+            world.module, val,
+            action=f"wm_write:{name}",
+            agent=agent_name,
+            intent=intent_,
+            capabilities=caps_,
+        )
         if refusal is not None:
             val = refusal
             world.record(agent_name, "refusal", policy=refusal.policy,

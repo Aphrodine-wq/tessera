@@ -1,0 +1,317 @@
+"""Constraint-logic policy mini-language (decision 12).
+
+A policy can carry one or more `forbid when <expr>` clauses. The runtime
+evaluates each expression against the active ActionContext at action
+boundaries; on True, the action is refused. Reactive deny lists
+(`forbid contains "X"`) remain supported as syntactic sugar.
+
+The expression grammar is small on purpose:
+
+    expr        := or_expr
+    or_expr     := and_expr ("or" and_expr)*
+    and_expr    := not_expr ("and" not_expr)*
+    not_expr    := "not" not_expr | cmp_expr
+    cmp_expr    := atom (("=="|"!="|"<="|">="|"<"|">") atom)?
+    atom        := number | string | predicate | "(" expr ")"
+    predicate   := IDENT "(" arglist? ")"
+    arglist     := expr ("," expr)*
+
+Built-in predicates: contains_pii(value), holds(cap), action_class(c),
+intent_is(name), cost_remaining(), value(). The `value()` predicate
+returns the action's value being checked — useful for comparisons.
+
+No constraint solver here; this is a boolean evaluator over runtime
+context. Static satisfiability (the governance consistency proof in
+pass_8) uses the same AST with finite-domain enumeration.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+# --------------------------------------------------------------------------
+# AST
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Expr:
+    """Base — every node has an `eval(ctx) -> bool | Any` method."""
+    def eval(self, ctx: "ActionContext") -> Any:  # pragma: no cover
+        raise NotImplementedError
+
+
+@dataclass
+class Lit(Expr):
+    value: Any
+    def eval(self, ctx): return self.value
+
+
+@dataclass
+class And_(Expr):
+    a: Expr
+    b: Expr
+    def eval(self, ctx): return bool(self.a.eval(ctx)) and bool(self.b.eval(ctx))
+
+
+@dataclass
+class Or_(Expr):
+    a: Expr
+    b: Expr
+    def eval(self, ctx): return bool(self.a.eval(ctx)) or bool(self.b.eval(ctx))
+
+
+@dataclass
+class Not_(Expr):
+    a: Expr
+    def eval(self, ctx): return not bool(self.a.eval(ctx))
+
+
+_CMP_OPS: dict[str, Callable[[Any, Any], bool]] = {
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+    "<":  lambda a, b: a < b,
+    ">":  lambda a, b: a > b,
+    "<=": lambda a, b: a <= b,
+    ">=": lambda a, b: a >= b,
+}
+
+
+@dataclass
+class Cmp(Expr):
+    op: str
+    a: Expr
+    b: Expr
+    def eval(self, ctx):
+        return _CMP_OPS[self.op](self.a.eval(ctx), self.b.eval(ctx))
+
+
+@dataclass
+class Pred(Expr):
+    name: str
+    args: list[Expr] = field(default_factory=list)
+    def eval(self, ctx):
+        fn = _PREDICATES.get(self.name)
+        if fn is None:
+            raise PolicySyntaxError(f"unknown predicate {self.name!r}")
+        return fn(ctx, *[a.eval(ctx) for a in self.args])
+
+
+# --------------------------------------------------------------------------
+# Runtime context
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class ActionContext:
+    """What's visible to a policy expression at evaluation time.
+
+    `value` is the just-computed result the policy is checking (e.g. the
+    rendered prompt text, the tool's return). `args` is the inputs to the
+    operation. The runtime fills in whichever fields it has.
+    """
+    value: Any = None
+    action: str = ""
+    args: list[Any] = field(default_factory=list)
+    agent: str | None = None
+    intent: str | None = None
+    capabilities: frozenset[str] = field(default_factory=frozenset)
+    cost_remaining_value: float | None = None
+
+
+# --------------------------------------------------------------------------
+# Predicates
+# --------------------------------------------------------------------------
+
+
+_PII_PATTERNS = [
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),                  # SSN
+    re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b"),           # email
+    re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),  # phone
+    re.compile(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"),  # credit card
+]
+
+
+def _contains_pii(ctx: ActionContext, value=None) -> bool:
+    target = value if value is not None else ctx.value
+    if target is None:
+        return False
+    s = target if isinstance(target, str) else str(target)
+    return any(p.search(s) for p in _PII_PATTERNS)
+
+
+def _holds(ctx: ActionContext, cap: str) -> bool:
+    from .capabilities import is_subcap_of
+    return any(is_subcap_of(cap, held) for held in ctx.capabilities)
+
+
+_ACTION_CLASS_LEX: dict[str, set[str]] = {
+    "payments":  {"payment", "charge", "invoice", "billing", "refund"},
+    "auth":      {"auth", "login", "oauth", "jwt", "session"},
+    "secrets":   {"secret", "api key", "credential", "password", "token"},
+    "egress":    {"http", "network", "fetch", "request"},
+}
+
+
+def _action_class(ctx: ActionContext, cls: str) -> bool:
+    lex = _ACTION_CLASS_LEX.get(cls, set())
+    s = (ctx.action or "").lower()
+    if any(tok in s for tok in lex):
+        return True
+    # Also check the rendered value if present
+    v = ctx.value
+    if v is not None:
+        sv = (v if isinstance(v, str) else str(v)).lower()
+        if any(tok in sv for tok in lex):
+            return True
+    return False
+
+
+def _intent_is(ctx: ActionContext, name: str) -> bool:
+    return ctx.intent == name
+
+
+def _cost_remaining(ctx: ActionContext) -> float:
+    return ctx.cost_remaining_value if ctx.cost_remaining_value is not None else float("inf")
+
+
+def _value(ctx: ActionContext):
+    return ctx.value
+
+
+_PREDICATES: dict[str, Callable[..., Any]] = {
+    "contains_pii":   _contains_pii,
+    "holds":          _holds,
+    "action_class":   _action_class,
+    "intent_is":      _intent_is,
+    "cost_remaining": _cost_remaining,
+    "value":          _value,
+}
+
+
+# --------------------------------------------------------------------------
+# Errors + parser
+# --------------------------------------------------------------------------
+
+
+class PolicySyntaxError(Exception):
+    pass
+
+
+_TOKEN_RE = re.compile(
+    r'\s*(?:'
+    r'(?P<STRING>"(?:[^"\\]|\\.)*")|'
+    r'(?P<NUMBER>-?\d+(?:\.\d+)?)|'
+    r"(?P<OP>==|!=|<=|>=|<|>|\(|\)|,)|"
+    r'(?P<IDENT>[A-Za-z_][\w.]*)'
+    r')'
+)
+
+
+def _tokens(src: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    pos = 0
+    while pos < len(src):
+        m = _TOKEN_RE.match(src, pos)
+        if not m:
+            rest = src[pos:].strip()
+            if not rest:
+                break
+            raise PolicySyntaxError(f"unrecognized token at: {rest[:20]!r}")
+        for kind in ("STRING", "NUMBER", "OP", "IDENT"):
+            v = m.group(kind)
+            if v is not None:
+                out.append((kind, v))
+                break
+        pos = m.end()
+    return out
+
+
+class _Parser:
+    def __init__(self, toks: list[tuple[str, str]]):
+        self.toks = toks
+        self.i = 0
+
+    def peek(self) -> tuple[str, str] | tuple[None, None]:
+        return self.toks[self.i] if self.i < len(self.toks) else (None, None)
+
+    def eat(self) -> tuple[str, str]:
+        if self.i >= len(self.toks):
+            raise PolicySyntaxError("unexpected end of expression")
+        t = self.toks[self.i]
+        self.i += 1
+        return t
+
+    def parse_expr(self) -> Expr:
+        return self._or()
+
+    def _or(self) -> Expr:
+        left = self._and()
+        while self.peek() == ("IDENT", "or"):
+            self.eat()
+            left = Or_(left, self._and())
+        return left
+
+    def _and(self) -> Expr:
+        left = self._not()
+        while self.peek() == ("IDENT", "and"):
+            self.eat()
+            left = And_(left, self._not())
+        return left
+
+    def _not(self) -> Expr:
+        if self.peek() == ("IDENT", "not"):
+            self.eat()
+            return Not_(self._not())
+        return self._cmp()
+
+    def _cmp(self) -> Expr:
+        left = self._atom()
+        kind, val = self.peek()
+        if kind == "OP" and val in _CMP_OPS:
+            self.eat()
+            return Cmp(val, left, self._atom())
+        return left
+
+    def _atom(self) -> Expr:
+        kind, val = self.eat()
+        if kind == "OP" and val == "(":
+            inner = self.parse_expr()
+            k2, v2 = self.eat()
+            if not (k2 == "OP" and v2 == ")"):
+                raise PolicySyntaxError(f"expected ')' got {v2!r}")
+            return inner
+        if kind == "NUMBER":
+            return Lit(float(val) if "." in val else int(val))
+        if kind == "STRING":
+            return Lit(val[1:-1].encode().decode("unicode_escape"))
+        if kind == "IDENT":
+            # Bare identifiers that look like booleans
+            if val == "true":  return Lit(True)
+            if val == "false": return Lit(False)
+            # Otherwise treat as predicate (with or without args)
+            if self.peek() == ("OP", "("):
+                self.eat()
+                args: list[Expr] = []
+                if self.peek() != ("OP", ")"):
+                    args.append(self.parse_expr())
+                    while self.peek() == ("OP", ","):
+                        self.eat()
+                        args.append(self.parse_expr())
+                k2, v2 = self.eat()
+                if not (k2 == "OP" and v2 == ")"):
+                    raise PolicySyntaxError(f"expected ')' got {v2!r}")
+                return Pred(val, args)
+            return Pred(val, [])
+        raise PolicySyntaxError(f"unexpected token {(kind, val)!r}")
+
+
+def parse(src: str) -> Expr:
+    toks = _tokens(src)
+    p = _Parser(toks)
+    expr = p.parse_expr()
+    if p.i != len(toks):
+        rest = toks[p.i:]
+        raise PolicySyntaxError(f"trailing tokens after expression: {rest!r}")
+    return expr

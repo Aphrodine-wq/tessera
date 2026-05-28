@@ -888,6 +888,10 @@ _POLICY_HEAD_RE = re.compile(r"policy\s+(\w+)\s*\{")
 _POLICY_FORBID_CONTAINS_RE = re.compile(r'forbid\s+contains\s+"([^"]+)"')
 _POLICY_FORBID_MATCH_RE = re.compile(r'forbid\s+match\s+"([^"]+)"')
 _POLICY_REQUIRE_CONTAINS_RE = re.compile(r'require\s+contains\s+"([^"]+)"')
+# Constraint-logic forms (decision 12). The expression body runs to end of line
+# or to the next semicolon. Newlines inside parens are OK.
+_POLICY_FORBID_WHEN_RE = re.compile(r'forbid\s+when\s+([^\n;]+)')
+_POLICY_PERMIT_WHEN_RE = re.compile(r'permit\s+when\s+([^\n;]+)')
 
 _EVAL_CASE_RE = re.compile(r'case\s+"([^"]+)"\s*\{')
 _EVAL_INPUT_RE = re.compile(r'input\s+(\w+)\s*=\s*"([^"]*)"')
@@ -976,6 +980,22 @@ def _lower_policy(block: SubstrateBlock, mod: Module) -> None:
         rules.append(("forbid_match", {"pattern": rm.group(1)}))
     for rm in _POLICY_REQUIRE_CONTAINS_RE.finditer(body):
         rules.append(("require_contains", {"needle": rm.group(1)}))
+    # New constraint-logic forms — only parse the `forbid contains` / `forbid match`
+    # forms above first so a `forbid when contains_pii(value)` doesn't get
+    # mistakenly matched by the older regexes.
+    from ..policy_lang import parse as _parse_policy_expr, PolicySyntaxError
+    for rm in _POLICY_FORBID_WHEN_RE.finditer(body):
+        try:
+            expr = _parse_policy_expr(rm.group(1).strip())
+        except PolicySyntaxError as e:
+            raise SyntaxFail(f"policy {name!r} forbid-when expression: {e}")
+        rules.append(("forbid_when", {"expr": expr, "src": rm.group(1).strip()}))
+    for rm in _POLICY_PERMIT_WHEN_RE.finditer(body):
+        try:
+            expr = _parse_policy_expr(rm.group(1).strip())
+        except PolicySyntaxError as e:
+            raise SyntaxFail(f"policy {name!r} permit-when expression: {e}")
+        rules.append(("permit_when", {"expr": expr, "src": rm.group(1).strip()}))
     mod.policies[name] = PolicyDecl(name=name, rules=rules)
 
 

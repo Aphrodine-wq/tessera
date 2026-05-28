@@ -428,6 +428,86 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_policy_constraint_forbid_when_contains_pii():
+    """A policy `forbid when contains_pii(value)` refuses a value with PII."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: PIIGuard
+tessera_version: 0.2
+---
+
+```tsr:policy
+policy NoPII {
+  forbid when contains_pii(value())
+}
+```
+
+```tsr:logic
+fn echo(s: String) -> String = s
+```
+
+```tsr:agent
+agent PIIGuard {
+  beliefs:
+    @last_write q: String
+  intentions:
+    plan run {
+      let r = echo(q)
+      return r
+    }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    # Value with PII should refuse
+    result = run_agent(module, "PIIGuard", initial_beliefs={"q": "my SSN is 123-45-6789"})
+    from tessera.interp.eval import Refusal
+    assert isinstance(result, Refusal), f"expected Refusal, got {result!r}"
+    assert "NoPII" in (result.policy or "")
+    # Value without PII should pass
+    result2 = run_agent(module, "PIIGuard", initial_beliefs={"q": "hello world"})
+    assert result2 == "hello world"
+
+
+def test_policy_constraint_permit_when_holds_cap():
+    """A policy `permit when holds("NetworkOut.HTTPS")` refuses when cap missing."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: NetGuard
+tessera_version: 0.2
+capabilities_requested: []
+---
+
+```tsr:policy
+policy MustHaveHTTPS {
+  permit when holds("NetworkOut.HTTPS")
+}
+```
+
+```tsr:logic
+fn echo(s: String) -> String = s
+```
+
+```tsr:agent
+agent NetGuard {
+  beliefs:
+    @last_write q: String
+  intentions:
+    plan run {
+      let r = echo(q)
+      return r
+    }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    from tessera.interp.eval import Refusal
+    result = run_agent(module, "NetGuard", initial_beliefs={"q": "anything"})
+    assert isinstance(result, Refusal), f"expected Refusal (cap not held), got {result!r}"
+
+
 def test_complaint_router_full_governance_stack():
     """The complaint_router example wires intent + ethics + autonomy +
     traits + capabilities into one agent. Smoke: parses, lowers, runs
