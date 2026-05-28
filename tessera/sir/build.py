@@ -41,7 +41,7 @@ from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
-    NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
+    EvolveDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
     TraitDecl, WorkspaceDecl,
 )
 
@@ -1210,6 +1210,39 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_EVOLVE_HEAD_RE = re.compile(r"evolve\s+(\w+)\s*\{")
+_EVOLVE_POP_RE = re.compile(r"population\s*:\s*(\d+)")
+_EVOLVE_GENS_RE = re.compile(r"generations\s*:\s*(\d+)")
+_EVOLVE_MUTATE_RE = re.compile(r"mutate\s*:\s*\[([^\]]*)\]")
+_EVOLVE_FITNESS_RE = re.compile(r"fitness\s*:\s*(\w+)")
+
+
+def _lower_evolve(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _EVOLVE_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `evolve AgentName { ... }`")
+    target = m.group(1)
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    pop = int(_EVOLVE_POP_RE.search(body).group(1)) if _EVOLVE_POP_RE.search(body) else 4
+    gens = int(_EVOLVE_GENS_RE.search(body).group(1)) if _EVOLVE_GENS_RE.search(body) else 3
+    fit_m = _EVOLVE_FITNESS_RE.search(body)
+    fitness = fit_m.group(1) if fit_m else "eval_pass_rate"
+    mut_m = _EVOLVE_MUTATE_RE.search(body)
+    mutate_targets = (
+        [s.strip() for s in mut_m.group(1).split(",") if s.strip()]
+        if mut_m else ["prompts"]
+    )
+    mod.evolve = EvolveDecl(
+        target_agent=target,
+        population=pop,
+        generations=gens,
+        fitness=fitness,
+        mutate_targets=mutate_targets,
+    )
+
+
 def _lower_knowledge(block: SubstrateBlock, mod: Module) -> None:
     src = block.body
     m = _KNOWLEDGE_HEAD_RE.search(src)
@@ -1311,6 +1344,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_ethics(block, mod)
         elif block.substrate == "autonomy":
             _lower_autonomy(block, mod)
+        elif block.substrate == "evolve":
+            _lower_evolve(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

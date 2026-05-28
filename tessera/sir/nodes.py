@@ -359,6 +359,22 @@ class AutonomyDecl:
 
 
 @dataclass
+class EvolveDecl:
+    """A genetic evolution declaration (decision 17).
+
+    Target agent gets N variants per generation; mutation operators
+    perturb the targets (prompts/traits) and fitness is measured against
+    the agent's eval cases. The best agent of each generation persists
+    its prompts/traits + score to the governance audit store.
+    """
+    target_agent: str
+    population: int = 4
+    mutate_targets: list[str] = field(default_factory=lambda: ["prompts"])
+    fitness: str = "eval_pass_rate"
+    generations: int = 3
+
+
+@dataclass
 class Module:
     name: str
     regions: list[Region] = field(default_factory=list)
@@ -377,6 +393,7 @@ class Module:
     intents: dict[str, IntentDecl] = field(default_factory=dict)
     ethics: "EthicsDecl | None" = None
     autonomy: "AutonomyDecl | None" = None
+    evolve: "EvolveDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:

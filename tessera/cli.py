@@ -215,6 +215,21 @@ def _cmd_audit_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_evolve(args: argparse.Namespace) -> int:
+    pm = parse_file(args.file)
+    module = lower(pm)
+    if module.evolve is None:
+        print(f"no tsr:evolve block in {args.file}")
+        return 1
+    from .evolve import evolve as run_evolve
+    history = run_evolve(module)
+    print(f"target agent: {module.evolve.target_agent}")
+    for gen in history:
+        print(f"  gen {gen.generation}: best_score={gen.best_score:.3f} "
+              f"variant={gen.best_variant_id}")
+    return 0
+
+
 def _cmd_audit_purge(args: argparse.Namespace) -> int:
     from .adapters.audit import purge_operational
     n = purge_operational(
@@ -310,6 +325,11 @@ def main(argv: list[str] | None = None) -> int:
     audp.add_argument("--days", type=int,
                       help="Override TESSERA_AUDIT_RETENTION_DAYS (default 30)")
     audp.set_defaults(fn=_cmd_audit_purge)
+
+    # evolve
+    ev = sub.add_parser("evolve", help="Run the tsr:evolve block in a file")
+    ev.add_argument("file")
+    ev.set_defaults(fn=_cmd_evolve)
 
     # version
     verp = sub.add_parser("version")

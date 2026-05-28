@@ -428,6 +428,66 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_evolve_block_parses_and_runs():
+    """A tsr:evolve block parses to EvolveDecl. Running it produces per-generation
+    audit events and the agent's prompt is mutated across generations."""
+    from tessera.parser.module import parse_source
+    from tessera.evolve import evolve
+    from tessera.adapters.audit import query_events
+    src = """---
+agent: Reflector
+tessera_version: 0.2
+---
+
+```tsr:logic
+fn echo(s: String) -> String = s
+```
+
+```tsr:prompt
+prompt think(q: String) -> String = "Reflect on: {q}"
+```
+
+```tsr:agent
+agent Reflector {
+  beliefs:
+    @last_write q: String
+  intentions:
+    plan run {
+      let r = think(q)
+      return r
+    }
+}
+```
+
+```tsr:eval
+case "noop-passes" {
+  input q = "anything"
+  expect_contains = "Reflect"
+}
+```
+
+```tsr:evolve
+evolve Reflector {
+  population: 2
+  generations: 2
+  mutate: [prompts]
+  fitness: eval_pass_rate
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    assert module.evolve is not None
+    assert module.evolve.target_agent == "Reflector"
+    assert module.evolve.population == 2
+    assert module.evolve.generations == 2
+    history = evolve(module)
+    assert len(history) == 2
+    # Audit captures one event per generation
+    rows = query_events(action="evolve:generation_0")
+    assert rows, "expected audit event for generation 0"
+
+
 def test_trainable_neural_parses_and_carries_config():
     """A `model X { ... } trainable { optimizer: adam(lr=1e-3); epochs: 5 }`
     block parses and the NeuralModelDecl carries the training fields."""
