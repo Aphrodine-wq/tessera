@@ -223,6 +223,31 @@ def pass_5_governance(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_6_capability_taxonomy(m: Module) -> list[Diagnostic]:
+    """Walk every capability declared on a region and validate it against the
+    two-tier taxonomy. Unknown subtypes warn (don't error) so legacy v0.1
+    files with coarse cap labels still compile.
+    """
+    from ..capabilities import validate
+    diags: list[Diagnostic] = []
+    seen: set[str] = set()
+    for region in m.regions:
+        for cap in sorted(region.capabilities_in_scope):
+            if cap in seen:
+                continue
+            seen.add(cap)
+            msg = validate(cap)
+            if msg:
+                diags.append(Diagnostic(
+                    code="E600",
+                    severity="warning",
+                    region=region.name,
+                    node="-",
+                    message=msg,
+                ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
@@ -230,6 +255,7 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_3_trait_resolution(m),
         *pass_4_intent(m),
         *pass_5_governance(m),
+        *pass_6_capability_taxonomy(m),
     ]
 
 

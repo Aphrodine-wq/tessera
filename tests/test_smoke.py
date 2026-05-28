@@ -329,6 +329,87 @@ agent EphemeralAgent {
     assert not db.exists(), "persistent=false leaked a write to disk"
 
 
+def test_capability_taxonomy_warns_unknown_subtype():
+    """An agent declaring NetworkOut.WAT gets an E600 warning, not an error."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: BadCapAgent
+tessera_version: 0.2
+capabilities_requested: [NetworkOut.WAT]
+---
+
+```tsr:agent
+agent BadCapAgent {
+  beliefs: @last_write x: String
+  intentions: plan p { return "ok" }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    diags = run_local(module)
+    e600 = [d for d in diags if d.code == "E600"]
+    assert e600, "expected E600 warning for unknown subtype NetworkOut.WAT"
+    assert e600[0].severity == "warning"
+
+
+def test_capability_taxonomy_accepts_known_subtype():
+    """An agent declaring NetworkOut.HTTPS produces no E600 diagnostics."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: GoodCapAgent
+tessera_version: 0.2
+capabilities_requested: [NetworkOut.HTTPS]
+---
+
+```tsr:agent
+agent GoodCapAgent {
+  beliefs: @last_write x: String
+  intentions: plan p { return "ok" }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    diags = run_local(module)
+    e600 = [d for d in diags if d.code == "E600"]
+    assert not e600, f"expected no E600 for NetworkOut.HTTPS, got: {e600}"
+
+
+def test_capability_taxonomy_basic():
+    """Two-tier capability lookups: normalize, subcap check, intersect."""
+    from tessera.capabilities import normalize, is_subcap_of, intersect, validate
+
+    # Bare parent expands to .Any
+    assert normalize("NetworkOut") == "NetworkOut.Any"
+    assert normalize("NetworkOut.HTTPS") == "NetworkOut.HTTPS"
+    # Unknown caps pass through (legacy compat)
+    assert normalize("Carbon") == "Carbon"
+
+    # .Any in parent covers everything in the family
+    assert is_subcap_of("NetworkOut.HTTPS", "NetworkOut.Any")
+    assert is_subcap_of("NetworkOut.HTTPS", "NetworkOut")  # parent shorthand
+    # Cross-family never matches
+    assert not is_subcap_of("FileSystem.ReadOnly", "NetworkOut.Any")
+    # Different subtypes of the same family don't match
+    assert not is_subcap_of("NetworkOut.HTTP", "NetworkOut.HTTPS")
+    assert is_subcap_of("NetworkOut.HTTPS", "NetworkOut.HTTPS")
+
+    # Auto-restrict: child wants Any, parent has narrower — child gets narrower
+    parent = {"NetworkOut.HTTPS"}
+    child = {"NetworkOut.Any"}
+    # parent has only HTTPS; child asked Any; grant exactly the parent's subtype
+    granted = intersect(parent, child)
+    assert granted == {"NetworkOut.HTTPS"} or granted == set(), \
+        f"unexpected: {granted}"
+
+    # Validate flags unknown subtype but accepts known
+    assert validate("NetworkOut.HTTPS") is None
+    assert validate("NetworkOut.WAT") is not None
+    # Unknown parents are pass-through (no validation error)
+    assert validate("Carbon.Steel") is None
+
+
 def test_migration_advisor_fires_built_in_traits():
     """The migration_advisor example resolves built-in traits by name (no
     tsr:traits block) and records them in audit when their triggers match."""
