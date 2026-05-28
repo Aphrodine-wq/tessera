@@ -436,6 +436,11 @@ def _lower_workspace(block: SubstrateBlock, mod: Module) -> None:
             inner = line.partition(":")[2].strip()
             if inner.startswith("[") and inner.endswith("]"):
                 decl.contenders = [s.strip() for s in inner[1:-1].split(",") if s.strip()]
+        elif line.startswith("gwt_bottleneck"):
+            decl.gwt_bottleneck = int(line.partition(":")[2].strip())
+        elif line.startswith("track_ignition"):
+            val = line.partition(":")[2].strip().lower()
+            decl.track_ignition = (val == "true")
     mod.workspaces[name] = decl
 
 

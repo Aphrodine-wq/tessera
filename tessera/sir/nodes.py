@@ -169,11 +169,26 @@ class Region:
 
 @dataclass
 class WorkspaceDecl:
-    """Declared workspace — instantiated at runtime by the actor scheduler."""
+    """Declared workspace — instantiated at runtime by the actor scheduler.
+
+    Global Workspace Theory extension (research B1).
+    Primary references:
+      - Baars, B. (1988). A Cognitive Theory of Consciousness. Cambridge UP.
+      - Dehaene, S. (2014). Consciousness and the Brain.
+
+    `gwt_bottleneck` caps how many contenders the workspace can hold at
+    once — Baars's attention bottleneck. When the limit is exceeded the
+    lowest-salience contender drops out. `track_ignition` toggles whether
+    arbitration emits a `gwt:ignition` audit event with the bandwidth
+    (contender count) and selected winner — Dehaene's ignition signature
+    measured functionally.
+    """
     name: str
     capacity: int = 1
     arbiter: str = "highest_salience"
     contenders: list[str] = field(default_factory=list)
+    gwt_bottleneck: int = 0          # 0 = unlimited; >0 = max contenders
+    track_ignition: bool = False     # emit gwt:ignition audit on arbitrate
 
 
 @dataclass

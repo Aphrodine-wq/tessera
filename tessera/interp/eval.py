@@ -191,26 +191,55 @@ class AgentState:
 
 @dataclass
 class WorkspaceState:
+    """Runtime view of a declared workspace.
+
+    GWT extension (research B1): `gwt_bottleneck` enforces Baars's
+    attention bottleneck — when more contenders pile up than the
+    bottleneck allows, the lowest-salience ones are dropped before
+    arbitration. `track_ignition` (set on the decl) gates whether
+    arbitration broadcasts a `gwt:ignition` audit event recording the
+    bandwidth (contender count) and the selected winner — Dehaene's
+    ignition signature measured functionally.
+    """
     decl: WorkspaceDecl
     contenders: list[tuple[Any, float]] = field(default_factory=list)  # (value, salience)
     draft_history: deque = field(default_factory=lambda: deque(maxlen=16))
     last_winner: Any = None
+    # Provenance for ignition audit: set by World.ensure_workspace if needed.
+    _world_ref: Any = None
+    _ignition_seq: int = 0
 
     def broadcast(self, value: Any, salience: float) -> None:
         self.contenders.append((value, salience))
         self.draft_history.append((value, salience))
+        # Apply GWT bottleneck if declared
+        if self.decl.gwt_bottleneck > 0 and len(self.contenders) > self.decl.gwt_bottleneck:
+            self.contenders.sort(key=lambda x: -x[1])
+            self.contenders = self.contenders[: self.decl.gwt_bottleneck]
         self._arbitrate()
 
     def _arbitrate(self) -> None:
         if not self.contenders:
             return
+        bandwidth = len(self.contenders)
         if self.decl.arbiter == "highest_salience":
-            winner_value, _ = max(self.contenders, key=lambda x: x[1])
+            winner_value, winner_salience = max(self.contenders, key=lambda x: x[1])
         else:
             # default: last-write-wins
-            winner_value, _ = self.contenders[-1]
+            winner_value, winner_salience = self.contenders[-1]
         self.last_winner = winner_value
         self.contenders.clear()
+        if self.decl.track_ignition and self._world_ref is not None:
+            self._ignition_seq += 1
+            self._world_ref.record(
+                None,
+                f"gwt:ignition:{self.decl.name}",
+                workspace=self.decl.name,
+                bandwidth=bandwidth,
+                winner_salience=winner_salience,
+                bottleneck=self.decl.gwt_bottleneck,
+                cycle=self._ignition_seq,
+            )
 
 
 @dataclass
@@ -260,7 +289,9 @@ class World:
     def ensure_workspace(self, name: str) -> WorkspaceState:
         if name not in self.workspaces:
             decl = self.module.workspaces.get(name) or WorkspaceDecl(name=name)
-            self.workspaces[name] = WorkspaceState(decl=decl)
+            ws = WorkspaceState(decl=decl)
+            ws._world_ref = self  # lets ignition audit reach back into the world
+            self.workspaces[name] = ws
         return self.workspaces[name]
 
     def state_for(self, agent_name: str) -> AgentState:
