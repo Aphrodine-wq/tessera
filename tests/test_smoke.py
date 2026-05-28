@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from tessera.adapters.synapse import write_module
 from tessera.interp.eval import run_agent
 from tessera.parser.module import parse_file
 from tessera.sir.build import lower
@@ -261,7 +260,7 @@ def test_vault_assistant_logs_and_recalls(monkeypatch):
     assert state.episodic[0][1] == ["what is retainage?"]
 
 
-# ---------------- memory:semantic via Synapse ----------------
+# ---------------- memory:semantic (local SQLite) ----------------
 
 
 def test_knowledge_assistant_remembers_and_looks_up():
@@ -276,33 +275,16 @@ def test_knowledge_assistant_remembers_and_looks_up():
     assert any("retainage" in r["fields"]["title"] for r in result)
 
 
-def test_semantic_substrate_round_trips_through_synapse_test_db(tmp_path):
-    """Real-vault writes work when given an explicit test sqlite with Synapse schema."""
-    import sqlite3
-    from tessera.adapters.synapse import lookup_facts, remember_fact
-    db = tmp_path / "kb.sqlite"
-    schema_sql = """
-    CREATE TABLE blocks (
-      id TEXT PRIMARY KEY NOT NULL, content BLOB NOT NULL,
-      content_text TEXT NOT NULL DEFAULT '', block_type TEXT NOT NULL,
-      created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
-      activation_score DOUBLE NOT NULL DEFAULT 1.0,
-      decay_rate DOUBLE NOT NULL DEFAULT 1.0,
-      emotional_valence DOUBLE NOT NULL DEFAULT 0.0,
-      is_pinned BOOLEAN NOT NULL DEFAULT 0,
-      embedding BLOB, hlc_timestamp TEXT NOT NULL,
-      author_kind TEXT NOT NULL DEFAULT 'human', author_id TEXT,
-      review_status TEXT NOT NULL DEFAULT 'approved'
-    );
-    """
-    with sqlite3.connect(db) as conn:
-        conn.executescript(schema_sql)
+def test_semantic_substrate_round_trips(tmp_path):
+    """remember_fact + lookup_facts round-trip against a fresh local sqlite."""
+    from tessera.adapters.semantic import lookup_facts, remember_fact
+    db = tmp_path / "semantic.db"
 
-    bid = remember_fact("Person", {"name": "Josh", "role": "GC"},
-                        dry_run=False, vault_path=db)
-    assert bid is not None
+    fid = remember_fact("Person", {"name": "Josh", "role": "GC"}, db_path=db)
+    assert fid is not None
+
     results = lookup_facts("Person", where_field="name", where_value="Josh",
-                           vault_path=db)
+                           db_path=db)
     assert len(results) == 1
     assert results[0]["fields"]["role"] == "GC"
 
@@ -634,29 +616,6 @@ def test_spawn_refuses_unheld_capabilities():
     assert raised, "expected RuntimeError_ when spawning without held capability"
 
 
-def test_synapse_dry_run_is_default():
-    """write_module must not touch any database without explicit dry_run=False."""
-    pm = parse_file(HELLO)
-    module = lower(pm)
-    artifact = write_module(module)
-    assert artifact.backend == "stub"
-    assert not artifact.written
-    assert artifact.block_count > 0
-    assert artifact.edge_count > 0
-
-
-def test_synapse_refuses_real_vault_without_env(monkeypatch):
-    """Even with dry_run=False, the real vault path is off-limits unless env var is set."""
-    import os
-    monkeypatch.delenv("TESSERA_ALLOW_REAL_VAULT", raising=False)
-    pm = parse_file(HELLO)
-    module = lower(pm)
-    artifact = write_module(module, dry_run=False)
-    assert artifact.backend == "stub"
-    assert not artifact.written
-    assert any("real Synapse vault" in n for n in artifact.notes)
-
-
 @pytest.mark.skipif(not _aeon_available(), reason="AEON not installed in this venv")
 def test_aeon_verifies_emitted_sir(tmp_path):
     """AEON must accept .sir, parse regions as functions, and return VERIFIED for the hello example."""
@@ -680,52 +639,18 @@ def test_aeon_recognizes_sir_extension():
     assert ".sir" in langs["tessera"]["extensions"]
 
 
-def test_synapse_writes_to_test_db(tmp_path):
-    """A fresh SQLite created against Synapse's real schema must accept Tessera writes."""
-    # Build a minimal Synapse-compatible schema
+def test_semantic_writes_to_test_db(tmp_path):
+    """Multiple remember_fact calls accumulate rows in the local sqlite."""
     import sqlite3
-    db = tmp_path / "test_vault.sqlite"
-    schema = """
-    CREATE TABLE blocks (
-      id TEXT PRIMARY KEY NOT NULL, content BLOB NOT NULL,
-      content_text TEXT NOT NULL DEFAULT '', block_type TEXT NOT NULL,
-      created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
-      activation_score DOUBLE NOT NULL DEFAULT 1.0,
-      decay_rate DOUBLE NOT NULL DEFAULT 1.0,
-      emotional_valence DOUBLE NOT NULL DEFAULT 0.0,
-      is_pinned BOOLEAN NOT NULL DEFAULT 0,
-      embedding BLOB, hlc_timestamp TEXT NOT NULL,
-      author_kind TEXT NOT NULL DEFAULT 'human', author_id TEXT,
-      review_status TEXT NOT NULL DEFAULT 'approved'
-    );
-    CREATE TABLE edges (
-      id TEXT PRIMARY KEY NOT NULL,
-      source_id TEXT NOT NULL, target_id TEXT NOT NULL,
-      edge_type TEXT NOT NULL, weight DOUBLE NOT NULL, polarity TEXT NOT NULL,
-      created_at DATETIME NOT NULL, last_traversed DATETIME NOT NULL,
-      traversal_count INTEGER NOT NULL DEFAULT 0,
-      author_kind TEXT NOT NULL DEFAULT 'human', author_id TEXT,
-      review_status TEXT NOT NULL DEFAULT 'approved'
-    );
-    """
-    with sqlite3.connect(db) as conn:
-        conn.executescript(schema)
+    from tessera.adapters.semantic import remember_fact
+    db = tmp_path / "semantic.db"
 
-    pm = parse_file(HELLO)
-    module = lower(pm)
-    artifact = write_module(module, dry_run=False, vault_path=db)
-    assert artifact.backend == "sqlite"
-    assert artifact.written
+    remember_fact("Person", {"name": "Josh", "role": "GC"}, db_path=db)
+    remember_fact("Person", {"name": "Mason", "role": "CTO"}, db_path=db)
 
     with sqlite3.connect(db) as conn:
-        n_blocks = conn.execute(
-            "SELECT COUNT(*) FROM blocks WHERE author_id='tessera-compiler'"
-        ).fetchone()[0]
-        n_edges = conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE author_id='tessera-compiler'"
-        ).fetchone()[0]
-    assert n_blocks == artifact.block_count
-    assert n_edges == artifact.edge_count
+        n = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+    assert n == 2
 
 
 # ---------------- cognitive traits ----------------

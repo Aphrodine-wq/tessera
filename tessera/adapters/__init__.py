@@ -1,1 +1,1 @@
-"""Adapters to external systems — AEON (verify), Synapse (Κ target)."""
+"""Adapters: AEON (verify), local semantic fact store, Obsidian vault, LLM/tool/neural backends."""

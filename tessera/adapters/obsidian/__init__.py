@@ -15,7 +15,7 @@ scan the vault for any ``.md`` file whose stem matches the link, and inline
 its content. Multiple matches → first by alphabetical path.
 
 Safety: scan + resolve are pure reads. ``scaffold_agent`` writes ONE file to
-an explicit path you provide — same model as the Synapse adapter's opt-in.
+an explicit path you provide.
 """
 from __future__ import annotations
 

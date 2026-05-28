@@ -36,7 +36,7 @@ class Op(str, Enum):
     EM_Append = "tsr.em.append"
     EM_Query = "tsr.em.query"
 
-    # Memory: Semantic (§4.3 — semantic tier, Synapse-backed)
+    # Memory: Semantic (§4.3 — semantic tier, local fact store)
     SM_Insert = "tsr.sm.insert"
     SM_Search = "tsr.sm.search"
 

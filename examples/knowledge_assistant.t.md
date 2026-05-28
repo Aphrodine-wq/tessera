@@ -4,12 +4,12 @@ capabilities_requested: []
 max_cost: { dollars: 0.00, tokens: 0 }
 ---
 
-# Knowledge Assistant — memory:semantic via Synapse
+# Knowledge Assistant — memory:semantic
 
-Agent that **remembers** facts as typed Synapse Blocks and **looks them up**
-by domain in subsequent plan invocations. The `memory:semantic` substrate
-routes writes through the Synapse adapter (dry-run by default — opt in to
-real-vault persistence with `TESSERA_ALLOW_REAL_VAULT=1`).
+Agent that **remembers** typed facts and **looks them up** by domain in
+subsequent plan invocations. The `memory:semantic` substrate writes through
+a local SQLite fact store at `~/.tessera/semantic.db` (override with the
+`TESSERA_SEMANTIC_DB` env var).
 
 ```tsr:memory:semantic
 knowledge {

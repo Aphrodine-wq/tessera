@@ -178,10 +178,6 @@ class World:
     workspaces: dict[str, WorkspaceState] = field(default_factory=dict)
     region_results: dict[str, Any] = field(default_factory=dict)
     spawn_log: list[str] = field(default_factory=list)
-    # In-process semantic memory shadow — used when Synapse is unreachable or
-    # in test mode. Real persistence still flows through the Synapse adapter
-    # when TESSERA_ALLOW_REAL_VAULT=1.
-    semantic_store: list[dict] = field(default_factory=list)
     # Concurrent actor scheduler. None means we run synchronously (sequential
     # legacy behavior). Created on first spawn when concurrent=True is asked
     # via run_agent(... concurrent=True) or TESSERA_CONCURRENT_AGENTS=1.
@@ -541,34 +537,17 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         field_names = n.attributes.get("fields") or []
         arg_vals = [values[i] for i in n.inputs]
         record = {"schema": schema, "fields": dict(zip(field_names, arg_vals))}
-        world.semantic_store.append(record)
-        # Best-effort persistence to Synapse (dry-run by default).
-        try:
-            from ..adapters.synapse import remember_fact
-            remember_fact(schema, record["fields"], dry_run=True)
-        except Exception:
-            pass
+        from ..adapters.semantic import remember_fact
+        remember_fact(schema, record["fields"])
         return record
 
     if op is Op.SM_Search:
         schema = n.attributes.get("schema", "")
         where_field = n.attributes.get("where_field")
         where_value = values[n.inputs[0]] if (where_field and n.inputs) else None
-        # In-process matches first
-        results = [
-            r for r in world.semantic_store
-            if r["schema"] == schema
-            and (where_field is None or r["fields"].get(where_field) == where_value)
-        ]
-        # Best-effort: also query Synapse if reachable; merge.
-        try:
-            from ..adapters.synapse import lookup_facts
-            extra = lookup_facts(schema, where_field=where_field,
-                                 where_value=where_value)
-            results = results + extra
-        except Exception:
-            pass
-        return results
+        from ..adapters.semantic import lookup_facts
+        return lookup_facts(schema, where_field=where_field,
+                            where_value=where_value)
 
     if op is Op.Until:
         pred_region = n.attributes.get("pred_region")

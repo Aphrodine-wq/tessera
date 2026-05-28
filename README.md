@@ -2,8 +2,8 @@
 
 **Markdown-native programming language for AI agents.** Write agents in
 `.t.md` files; the compiler verifies them via AEON, persists their knowledge
-via Synapse, discovers them in your Obsidian vault, and runs them through real
-LLM / LangChain / PyTorch backends.
+to a local SQLite fact store, discovers them in your Obsidian vault, and
+runs them through real LLM / LangChain / PyTorch backends.
 
 Read [`docs/architecture.md`](docs/architecture.md) for the cathedral view of
 how it all fits together. This README is the quick start.
@@ -62,7 +62,7 @@ tessera/
 ├── cli.py         tessera compile / vault / substrates commands
 └── adapters/
     ├── aeon/      → AEON (formal verification, 73 engines)
-    ├── synapse/   → Synapse (knowledge graph, GRDB)
+    ├── semantic/  → local SQLite fact store for memory:semantic
     ├── obsidian/  → vault scan + scaffold
     ├── llm/       → Ollama (default) + Anthropic + noop
     ├── langchain/ → import any LangChain Tool by dotted path
@@ -88,7 +88,7 @@ tessera substrates    # prints English breakdown of all 16 categories
 | `memory:working` | per-invocation scratchpad | `let x = compute(input)` |
 | `memory:workspace` | global blackboard, arbiter picks winner | `workspace TeamMind { arbiter: highest_salience }` |
 | `memory:episodic` | append-only event log | `log Decision(topic, choice)` |
-| `memory:semantic` | knowledge graph (Synapse-backed) | `remember FactSheet(title=..., domain=...)` |
+| `memory:semantic` | knowledge graph (local fact store) | `remember FactSheet(title=..., domain=...)` |
 | `prompt` | LLM template + bindings | `prompt summarize(t) -> String = "..."` |
 | `tool` | external callable (python or LangChain) | `tool web_search(q) from langchain_community.tools.DuckDuckGoSearchRun` |
 | `neural` | torch nn.Module declared inline | `model classifier { linear in=4 out=8; relu; ... }` |
@@ -112,7 +112,7 @@ slice of the language.
 | `research_assistant.t.md` | prompt + tool + LangChain bridge |
 | `perception.t.md` | PyTorch `neural` substrate |
 | `vault_assistant.t.md` | `memory:episodic` event log |
-| `knowledge_assistant.t.md` | `memory:semantic` via Synapse |
+| `knowledge_assistant.t.md` | `memory:semantic` round-trip into local SQLite |
 
 ---
 
@@ -141,12 +141,12 @@ TESSERA_LLM_BACKEND=noop tessera compile ...        # deterministic stub
 ## Status
 
 - **Lines of code:** ~3.6K Python + 7 example agents
-- **Tests:** 33 passing
+- **Tests:** 67 passing
 - **Shipped substrates:** logic, agent, memory:working, memory:workspace,
   memory:episodic, memory:semantic, prompt, tool, neural
-- **External integrations:** AEON (verify), Synapse (semantic memory + Κ
-  artifacts), Obsidian (vault scan + scaffold), Ollama, Anthropic,
-  LangChain, PyTorch
+- **External integrations:** AEON (verify), Obsidian (vault scan + scaffold),
+  Ollama, Anthropic, LangChain, PyTorch. Semantic memory is self-contained
+  in a local SQLite store — no external service required.
 
 Pre-alpha. Use at your own risk. PRs welcome — the design lives in
 `docs/Tessera_PRD_v0.5.md` and the SIR spec in `docs/TESSERA-RFC-001-SIR.md`.

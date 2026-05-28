@@ -66,9 +66,10 @@ SUBSTRATE_DOCS: dict[str, dict] = {
     "memory:semantic": {
         "summary": "Knowledge graph — facts, concepts, relations the agent knows.",
         "when_to_use": "World knowledge that survives across runs and is shared "
-                       "across agents. Backed by Synapse (Block/Edge graph).",
+                       "across agents. Backed by a local SQLite fact store at "
+                       "`~/.tessera/semantic.db`.",
         "example_idiom": "knowledge { schema FactSheet(title: String, domain: String) }",
-        "maps_to": "Semantic memory; knowledge bases (Synapse backend)",
+        "maps_to": "Semantic memory; local fact store.",
         "status": "shipped",
     },
 

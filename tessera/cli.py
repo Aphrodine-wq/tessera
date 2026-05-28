@@ -8,7 +8,6 @@ from pathlib import Path
 from . import __version__
 from .adapters.aeon import verify_sir_text
 from .adapters.obsidian import scaffold_agent, scan_vault
-from .adapters.synapse import write_module
 from .interp.eval import run_agent
 from .parser.module import parse_file
 from .sir.build import lower
@@ -18,7 +17,7 @@ from .verify.passes import run_local
 
 
 def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = False,
-                 synapse_mode: str | None = None, run: str | None = None,
+                 run: str | None = None,
                  sets: list[str] | None = None, audit: str | None = None) -> int:
     pm = parse_file(file)
     module = lower(pm)
@@ -39,14 +38,6 @@ def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = Fal
         print(f"\n{len(errors)} error(s)")
         return 1
 
-    if synapse_mode:
-        artifact = write_module(module, dry_run=(synapse_mode == "dry-run"))
-        print(f"\nSynapse: {artifact.backend} backend — "
-              f"{artifact.block_count} blocks, {artifact.edge_count} edges "
-              f"(folder: {artifact.folder!r})")
-        for note in artifact.notes:
-            print(f"  note: {note}")
-
     if run:
         from .interp.eval import World
         beliefs = dict(kv.split("=", 1) for kv in (sets or []))
@@ -63,16 +54,10 @@ def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = Fal
 
 
 def _cmd_compile(args: argparse.Namespace) -> int:
-    synapse_mode = None
-    if args.synapse_dry_run:
-        synapse_mode = "dry-run"
-    elif args.synapse_write:
-        synapse_mode = "write"
     return _compile_run(
         args.file,
         emit_sir=args.emit_sir,
         use_aeon=args.aeon,
-        synapse_mode=synapse_mode,
         run=args.run,
         sets=args.set,
         audit=args.audit,
@@ -111,7 +96,6 @@ def _cmd_vault_run(args: argparse.Namespace) -> int:
         args.file,
         emit_sir=None,
         use_aeon=args.aeon,
-        synapse_mode=None,
         run=args.agent,
         sets=args.set,
     )
@@ -212,8 +196,6 @@ def main(argv: list[str] | None = None) -> int:
     cp.add_argument("file")
     cp.add_argument("--emit-sir", metavar="OUT")
     cp.add_argument("--aeon", action="store_true")
-    cp.add_argument("--synapse-dry-run", action="store_true")
-    cp.add_argument("--synapse-write", action="store_true")
     cp.add_argument("--run", metavar="AGENT")
     cp.add_argument("--set", action="append")
     cp.add_argument("--audit", metavar="OUT", help="write the run's audit trace as JSONL")
