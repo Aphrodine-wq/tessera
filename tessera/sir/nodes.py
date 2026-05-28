@@ -359,6 +359,34 @@ class AutonomyDecl:
 
 
 @dataclass
+class BayesianVarSpec:
+    """One discrete random variable in a tsr:bayesian block.
+
+    Reference: Blei, Kucukelbir, McAuliffe (2017). Variational inference:
+    a review for statisticians. JASA. (MVP uses exact discrete inference,
+    not VI; the citation marks the planned follow-up direction.)
+    """
+    name: str
+    values: list[str]
+    prior: list[float]
+
+
+@dataclass
+class BayesianLikelihoodSpec:
+    """A conditional probability table: P(observed | latent)."""
+    latent: str
+    observed: str
+    rows: dict[str, dict[str, float]]  # rows[latent_value][observed_value] = P
+
+
+@dataclass
+class BayesianDeclSIR:
+    """The full tsr:bayesian declaration captured in SIR."""
+    variables: list[BayesianVarSpec] = field(default_factory=list)
+    likelihoods: list[BayesianLikelihoodSpec] = field(default_factory=list)
+
+
+@dataclass
 class CausalDAGDecl:
     """Declared causal DAG (research substrate D1).
 
@@ -427,6 +455,7 @@ class Module:
     evolve: "EvolveDecl | None" = None
     metacognition: "MetacognitionDecl | None" = None
     causal_dags: dict[str, "CausalDAGDecl"] = field(default_factory=dict)
+    bayesian: "BayesianDeclSIR | None" = None
 
     def all_nodes(self):
         for r in self.regions:

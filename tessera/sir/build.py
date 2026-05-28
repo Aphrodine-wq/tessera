@@ -41,6 +41,7 @@ from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
+    BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
     CausalDAGDecl, EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
     TraitDecl, WorkspaceDecl,
 )
@@ -1210,6 +1211,65 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_BAYES_HEAD_RE = re.compile(r"bayesian\s*\{")
+# var name: [v1, v2, ...] prior [p1, p2, ...]
+_BAYES_VAR_RE = re.compile(
+    r"var\s+(\w+)\s*:\s*\[([^\]]+)\]\s*prior\s*\[([^\]]+)\]"
+)
+# likelihood observed given latent { latent_v -> observed_v: p; ... }
+_BAYES_LIK_HEAD_RE = re.compile(
+    r"likelihood\s+(\w+)\s+given\s+(\w+)\s*\{"
+)
+_BAYES_LIK_ROW_RE = re.compile(
+    r"(\w+)\s*->\s*(\w+)\s*:\s*([0-9.]+)"
+)
+
+
+def _lower_bayesian(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _BAYES_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `bayesian { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+
+    decl = BayesianDeclSIR()
+    for vm in _BAYES_VAR_RE.finditer(body):
+        name = vm.group(1)
+        values = [s.strip() for s in vm.group(2).split(",")]
+        prior = [float(s.strip()) for s in vm.group(3).split(",")]
+        if len(values) != len(prior):
+            raise SyntaxFail(
+                f"bayesian var {name!r}: values/prior length mismatch"
+            )
+        if abs(sum(prior) - 1.0) > 1e-6:
+            raise SyntaxFail(
+                f"bayesian var {name!r}: prior must sum to 1.0 (got {sum(prior):.4f})"
+            )
+        decl.variables.append(BayesianVarSpec(name=name, values=values, prior=prior))
+
+    # Parse likelihood blocks
+    cursor = 0
+    while True:
+        lm = _BAYES_LIK_HEAD_RE.search(body, cursor)
+        if not lm:
+            break
+        observed = lm.group(1)
+        latent = lm.group(2)
+        l_brace = body.index("{", lm.end() - 1)
+        l_body, end = _balanced_extract(body, l_brace)
+        rows: dict[str, dict[str, float]] = {}
+        for rm in _BAYES_LIK_ROW_RE.finditer(l_body):
+            latent_v, observed_v, p_str = rm.group(1), rm.group(2), rm.group(3)
+            rows.setdefault(latent_v, {})[observed_v] = float(p_str)
+        decl.likelihoods.append(BayesianLikelihoodSpec(
+            latent=latent, observed=observed, rows=rows,
+        ))
+        cursor = end
+
+    mod.bayesian = decl
+
+
 _CAUSAL_HEAD_RE = re.compile(r"causal\s+(\w+)\s*\{")
 _CAUSAL_VAR_RE = re.compile(r"var\s+(\w+)\s*:\s*\w+")
 _CAUSAL_EDGE_RE = re.compile(r"edge\s+(\w+)\s*->\s*(\w+)")
@@ -1409,6 +1469,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_metacognition(block, mod)
         elif block.substrate == "causal":
             _lower_causal(block, mod)
+        elif block.substrate == "bayesian":
+            _lower_bayesian(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":
