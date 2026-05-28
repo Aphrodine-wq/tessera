@@ -428,6 +428,43 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_policy_pii_guard_example_blocks_and_passes():
+    """The policy_pii_guard example refuses PII and lets benign text through."""
+    from tessera.interp.eval import Refusal
+    PII = Path(__file__).parent.parent / "examples" / "policy_pii_guard.t.md"
+    pm = parse_file(PII)
+    module = lower(pm)
+    bad = run_agent(module, "PIIGuard", initial_beliefs={"message": "SSN 123-45-6789"})
+    assert isinstance(bad, Refusal)
+    good = run_agent(module, "PIIGuard", initial_beliefs={"message": "hi friend"})
+    assert good == "hi friend"
+
+
+def test_trainable_perception_example_compiles():
+    """trainable_perception parses and the trainable clause registers."""
+    TP = Path(__file__).parent.parent / "examples" / "trainable_perception.t.md"
+    pm = parse_file(TP)
+    module = lower(pm)
+    decl = module.neural_models["classifier"]
+    assert decl.trainable is True
+    assert decl.epochs == 20
+    assert decl.optimizer == "adam"
+
+
+def test_evolve_researcher_example_runs():
+    """evolve_researcher parses + runs the evolve loop to completion."""
+    from tessera.evolve import evolve
+    from tessera.adapters.audit import query_events
+    ER = Path(__file__).parent.parent / "examples" / "evolve_researcher.t.md"
+    pm = parse_file(ER)
+    module = lower(pm)
+    assert module.evolve is not None
+    history = evolve(module)
+    assert len(history) == 4
+    rows = query_events(action="evolve")
+    assert len(rows) >= 4
+
+
 def test_training_corpus_assembler_writes_pairs():
     """Running the summarizer_with_promotion example produces audit events,
     and assemble_for_skill turns them into a JSONL corpus."""
