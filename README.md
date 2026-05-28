@@ -113,6 +113,7 @@ slice of the language.
 | `perception.t.md` | PyTorch `neural` substrate |
 | `vault_assistant.t.md` | `memory:episodic` event log |
 | `knowledge_assistant.t.md` | `memory:semantic` round-trip into local SQLite |
+| `migration_advisor.t.md` | built-in traits + ethics + audit (full governance stack) |
 
 ---
 
@@ -130,23 +131,61 @@ tessera vault new ~/Desktop/TheVault/Agents/NewBot.t.md \
 tessera compile examples/researcher.t.md --aeon \
     --run TeamLead --set topic="fair pricing"
 
+# Query the persistent audit store — provenance for any past run
+tessera audit query --agent MigrationAdvisor --intent advise_safely --count
+tessera audit query --action skill_promotion_pending
+tessera audit purge --days 30   # operational only; governance untouched
+
 # Pick an LLM backend
 TESSERA_LLM_BACKEND=ollama  TESSERA_OLLAMA_MODEL=glm-4.6:cloud tessera compile ...
 TESSERA_LLM_BACKEND=anthropic tessera compile ...   # uses ANTHROPIC_API_KEY
 TESSERA_LLM_BACKEND=noop tessera compile ...        # deterministic stub
 ```
 
+### v0.2 syntax
+
+Files declare their language version in frontmatter:
+
+```yaml
+---
+agent: MyAgent
+tessera_version: 0.2
+---
+```
+
+Files without a version are auto-migrated forward at parse time (default
+`0.1`). Migrations live in `tessera/migrations/` and run before SIR
+lowering — author files stay valid as the language evolves.
+
+`memory:semantic` blocks opt in per-block to disk persistence:
+
+```markdown
+\`\`\`tsr:memory:semantic persistent=true
+knowledge { schema FactSheet(title: String, domain: String) }
+\`\`\`
+```
+
+`persistent=true` writes to `~/.tessera/semantic.db` (override via
+`TESSERA_SEMANTIC_DB`). `persistent=false` keeps facts in a per-World
+shadow that lives only for the run.
+
 ---
 
 ## Status
 
-- **Lines of code:** ~3.6K Python + 7 example agents
-- **Tests:** 69 passing
+- **Tests:** 81 passing
 - **Shipped substrates:** logic, agent, memory:working, memory:workspace,
-  memory:episodic, memory:semantic, prompt, tool, neural
+  memory:episodic, memory:semantic, memory:procedural, prompt, tool, neural,
+  traits, intent, ethics, autonomy, policy, eval
+- **Built-in cognitive traits (10):** doubt_first, cross_brain, compulsive,
+  hypervigilant, synesthetic, manic_burst, imposter_recursion,
+  spectrum_directness, anxiety_simulation, insomniac_focus.
+- **Persistent stores (Tessera-owned, no external service):**
+  `~/.tessera/semantic.db` for `memory:semantic` facts;
+  `~/.tessera/audit_governance.db` (forever) + `~/.tessera/audit_operational.db`
+  (30-day rolling) for the audit / provenance graph.
 - **External integrations:** AEON (verify), Obsidian (vault scan + scaffold),
-  Ollama, Anthropic, LangChain, PyTorch. Semantic memory is self-contained
-  in a local SQLite store — no external service required.
+  Ollama, Anthropic, LangChain, PyTorch.
 
 Pre-alpha. Use at your own risk. PRs welcome — the design lives in
 `docs/Tessera_PRD_v0.5.md` and the SIR spec in `docs/TESSERA-RFC-001-SIR.md`.
