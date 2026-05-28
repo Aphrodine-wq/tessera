@@ -42,7 +42,7 @@ from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
     ASTDecl, BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
-    CausalDAGDecl, EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToolDecl,
+    CausalDAGDecl, EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl,
     TraitDecl, WorkspaceDecl,
 )
 
@@ -1216,6 +1216,28 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_TOM_HEAD_RE = re.compile(r"tom\s*\{")
+_TOM_TRACK_RE = re.compile(r"tracked_agents\s*:\s*\[([^\]]*)\]")
+_TOM_REFUSE_RE = re.compile(r"manipulation_refusal\s*:\s*(true|false)")
+
+
+def _lower_tom(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _TOM_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `tom { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = ToMDecl()
+    tm = _TOM_TRACK_RE.search(body)
+    if tm:
+        decl.tracked_agents = [s.strip() for s in tm.group(1).split(",") if s.strip()]
+    rm = _TOM_REFUSE_RE.search(body)
+    if rm:
+        decl.manipulation_refusal = (rm.group(1) == "true")
+    mod.tom = decl
+
+
 _AST_HEAD_RE = re.compile(r"ast\s*\{")
 _AST_FIDELITY_RE = re.compile(r"min_fidelity\s*:\s*([0-9.]+)")
 _AST_REFUSE_RE = re.compile(r"refuse_below_threshold\s*:\s*(true|false)")
@@ -1504,6 +1526,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_bayesian(block, mod)
         elif block.substrate == "ast":
             _lower_ast(block, mod)
+        elif block.substrate == "tom":
+            _lower_tom(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

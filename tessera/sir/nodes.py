@@ -374,6 +374,22 @@ class AutonomyDecl:
 
 
 @dataclass
+class ToMDecl:
+    """Theory of Mind substrate config (research C3).
+
+    Refs: Premack & Woodruff (1978); Baker, Saxe, Tenenbaum (2009);
+    Rabinowitz et al. (2018, Machine theory of mind).
+
+    `tracked_agents` is the list of agent names this agent maintains a
+    belief model for. `manipulation_refusal` (default true) makes the
+    agent refuse to produce outputs likely to leave the listener with
+    a false belief — pairs with the ethics substrate.
+    """
+    tracked_agents: list[str] = field(default_factory=list)
+    manipulation_refusal: bool = True
+
+
+@dataclass
 class ASTDecl:
     """Attention Schema Theory substrate config (research C2).
 
@@ -492,6 +508,7 @@ class Module:
     causal_dags: dict[str, "CausalDAGDecl"] = field(default_factory=dict)
     bayesian: "BayesianDeclSIR | None" = None
     ast: "ASTDecl | None" = None
+    tom: "ToMDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:
