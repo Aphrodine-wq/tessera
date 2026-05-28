@@ -813,6 +813,80 @@ def test_torch_adapter_skips_gracefully_without_torch():
             assert "torch" in str(e)
 
 
+def test_e700_static_spawn_cycle_detected():
+    """Two agents that spawn each other produce an E700 DeadlockCertain."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: A
+tessera_version: 0.2
+---
+
+```tsr:agent
+agent A {
+  beliefs:
+    @last_write x: String
+  intentions:
+    plan p {
+      let r = spawn B with []
+      return "a"
+    }
+}
+
+agent B {
+  beliefs:
+    @last_write x: String
+  intentions:
+    plan q {
+      let r = spawn A with []
+      return "b"
+    }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    diags = run_local(module)
+    e700 = [d for d in diags if d.code == "E700"]
+    assert e700, f"expected E700 for A↔B spawn cycle, got: {[d.code for d in diags]}"
+    assert e700[0].severity == "error"
+
+
+def test_no_e700_when_no_cycle():
+    """A linear spawn chain A -> B (no return spawn) produces no E700."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: A
+tessera_version: 0.2
+---
+
+```tsr:agent
+agent A {
+  beliefs:
+    @last_write x: String
+  intentions:
+    plan p {
+      let r = spawn B with []
+      return "a"
+    }
+}
+
+agent B {
+  beliefs:
+    @last_write x: String
+  intentions:
+    plan q {
+      return "b"
+    }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    diags = run_local(module)
+    e700 = [d for d in diags if d.code == "E700"]
+    assert not e700, f"expected no E700 for linear chain, got: {e700}"
+
+
 def test_spawn_auto_restricts_unheld_capabilities():
     """Spawn narrows the child's caps to the parent's intersection (decision 10).
     Caps the parent doesn't hold get dropped and the narrowing is audited."""

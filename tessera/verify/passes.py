@@ -223,6 +223,79 @@ def pass_5_governance(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_7_spawn_cycle(m: Module) -> list[Diagnostic]:
+    """Build a static spawn graph from Op.Spawn nodes in every agent region
+    and refuse pure cycles (decision 11 static layer). Each detected cycle
+    becomes one E700 DeadlockCertain error.
+
+    Send/Recv-based data-flow deadlocks are NOT detected here — they require
+    inter-region taint analysis. The dynamic per-recv timeout (decision 11
+    runtime half) is the safety net for those.
+    """
+    id_to_region = {r.id: r for r in m.regions}
+
+    def owner_agent_of(region: "Region") -> str | None:
+        cur = region
+        while cur is not None:
+            n = cur.name
+            if n.startswith("agent:") and ":notice_" not in n:
+                return n[len("agent:"):]
+            if cur.parent is None:
+                return None
+            cur = id_to_region.get(cur.parent)
+        return None
+
+    graph: dict[str, set[str]] = {a: set() for a in m.agents}
+    for region in m.regions:
+        owner = owner_agent_of(region)
+        if owner is None:
+            continue
+        for node in region.nodes:
+            if node.op is Op.Spawn:
+                target = node.attributes.get("agent")
+                if target:
+                    graph.setdefault(owner, set()).add(target)
+
+    cycles: list[list[str]] = []
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {n: WHITE for n in graph}
+    path: list[str] = []
+
+    def visit(n: str) -> None:
+        color[n] = GRAY
+        path.append(n)
+        for child in graph.get(n, ()):
+            c = color.get(child, WHITE)
+            if c == GRAY:
+                idx = path.index(child)
+                cycles.append(path[idx:] + [child])
+            elif c == WHITE:
+                color.setdefault(child, WHITE)
+                visit(child)
+        path.pop()
+        color[n] = BLACK
+
+    for n in list(graph):
+        if color.get(n, WHITE) == WHITE:
+            visit(n)
+
+    diags: list[Diagnostic] = []
+    seen: set[tuple[str, ...]] = set()
+    for cyc in cycles:
+        key = tuple(sorted(set(cyc)))
+        if key in seen:
+            continue
+        seen.add(key)
+        diags.append(Diagnostic(
+            code="E700",
+            severity="error",
+            region=f"agent:{cyc[0]}",
+            node="-",
+            message=f"static spawn cycle detected: {' -> '.join(cyc)}",
+        ))
+    return diags
+
+
 def pass_6_capability_taxonomy(m: Module) -> list[Diagnostic]:
     """Walk every capability declared on a region and validate it against the
     two-tier taxonomy. Unknown subtypes warn (don't error) so legacy v0.1
@@ -256,6 +329,7 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_4_intent(m),
         *pass_5_governance(m),
         *pass_6_capability_taxonomy(m),
+        *pass_7_spawn_cycle(m),
     ]
 
 
