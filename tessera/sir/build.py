@@ -42,7 +42,7 @@ from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
     ASTDecl, BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
-    CausalDAGDecl, EvolveDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl,
+    CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl,
     TraitDecl, WorkspaceDecl,
 )
 
@@ -1216,6 +1216,33 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_IIT_HEAD_RE = re.compile(r"iit\s*\{")
+_IIT_EMIT_RE = re.compile(r"emit_phi_audit\s*:\s*(true|false)")
+_IIT_SUBJECT_RE = re.compile(r"agent_subject\s*:\s*(\w+)")
+
+
+def _lower_iit(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _IIT_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `iit { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = IITDecl()
+    em = _IIT_EMIT_RE.search(body)
+    if em:
+        decl.emit_phi_audit = (em.group(1) == "true")
+    sm = _IIT_SUBJECT_RE.search(body)
+    if sm:
+        decl.agent_subject = sm.group(1)
+    # Compile-time check: refuse forbidden consciousness claims in the body.
+    from ..iit import claim_violates_consciousness_discipline
+    reason = claim_violates_consciousness_discipline(body)
+    if reason:
+        raise SyntaxFail(f"iit block: {reason}")
+    mod.iit = decl
+
+
 _TOM_HEAD_RE = re.compile(r"tom\s*\{")
 _TOM_TRACK_RE = re.compile(r"tracked_agents\s*:\s*\[([^\]]*)\]")
 _TOM_REFUSE_RE = re.compile(r"manipulation_refusal\s*:\s*(true|false)")
@@ -1528,6 +1555,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_ast(block, mod)
         elif block.substrate == "tom":
             _lower_tom(block, mod)
+        elif block.substrate == "iit":
+            _lower_iit(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

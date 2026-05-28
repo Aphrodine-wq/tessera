@@ -374,6 +374,29 @@ class AutonomyDecl:
 
 
 @dataclass
+class IITDecl:
+    """IIT substrate config (research C1).
+
+    Refs: Tononi (2004, 2016); Mediano et al. (2022).
+
+    Tessera ships φ* — Mediano et al.'s geometric-loss approximation
+    of integrated information. The canonical Tononi φ is intractable
+    past ~6 nodes; φ* runs in polynomial time over the agent's
+    belief/intention dependency graph.
+
+    `emit_phi_audit` toggles whether plan_enter emits an iit:phi event
+    with the computed score. `agent_subject` defaults to the host
+    agent of the file.
+
+    PHILOSOPHY.md: φ* is a STRUCTURAL measure. It is NOT consciousness.
+    Any block making φ > 0 → conscious inferences is rejected by
+    pass_9_consciousness_claim_check.
+    """
+    emit_phi_audit: bool = True
+    agent_subject: str = ""  # "" = host agent of this module
+
+
+@dataclass
 class ToMDecl:
     """Theory of Mind substrate config (research C3).
 
@@ -509,6 +532,7 @@ class Module:
     bayesian: "BayesianDeclSIR | None" = None
     ast: "ASTDecl | None" = None
     tom: "ToMDecl | None" = None
+    iit: "IITDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:
