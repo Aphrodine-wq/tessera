@@ -428,6 +428,63 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_governance_e1000_when_policy_is_unsatisfiable():
+    """A policy whose constraint refuses every sampled action emits E1000
+    (decision 18 MVP via sampling)."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: BadGov
+tessera_version: 0.2
+---
+
+```tsr:policy
+policy AlwaysRefuse {
+  forbid when true
+}
+```
+
+```tsr:agent
+agent BadGov {
+  beliefs: @last_write q: String
+  intentions: plan p { return q }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    diags = run_local(module)
+    e1000 = [d for d in diags if d.code == "E1000"]
+    assert e1000, f"expected E1000 governance contradiction, got: {[d.code for d in diags]}"
+
+
+def test_governance_no_e1000_for_satisfiable_policy():
+    """A normal forbid-when policy that lets benign actions through doesn't fire E1000."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: SaneGov
+tessera_version: 0.2
+---
+
+```tsr:policy
+policy NoPII {
+  forbid when contains_pii(value())
+}
+```
+
+```tsr:agent
+agent SaneGov {
+  beliefs: @last_write q: String
+  intentions: plan p { return q }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    diags = run_local(module)
+    e1000 = [d for d in diags if d.code == "E1000"]
+    assert not e1000, f"expected no E1000 for satisfiable policy, got: {e1000}"
+
+
 def test_evolve_block_parses_and_runs():
     """A tsr:evolve block parses to EvolveDecl. Running it produces per-generation
     audit events and the agent's prompt is mutated across generations."""

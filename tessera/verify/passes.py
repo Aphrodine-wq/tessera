@@ -321,6 +321,75 @@ def pass_6_capability_taxonomy(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_8_governance_consistency(m: Module) -> list[Diagnostic]:
+    """Sampling-based satisfiability check on governance composition
+    (decision 18). For each policy carrying `forbid_when` / `permit_when`
+    constraint expressions, enumerate a small set of representative
+    ActionContexts and verify at least one passes — if every sampled
+    action triggers refusal, the policy is over-constrained and the
+    composed governance set has no satisfying behavior. Emit E1000
+    GovernanceContradiction.
+
+    This is a fast approximation, not a SAT-complete proof. A real Z3
+    backend lands later via AEON. Catches the obvious bugs (forbid when
+    true, contradictory permit+forbid pairs) without taking compile time
+    proportional to action-space size.
+    """
+    diags: list[Diagnostic] = []
+    if not m.policies:
+        return diags
+    from ..policy_lang import ActionContext
+
+    # Small sample action space — covers the common shapes
+    samples: list[ActionContext] = [
+        ActionContext(value="benign string", action="prompt:foo",
+                      capabilities=frozenset({"NetworkOut.HTTPS"})),
+        ActionContext(value="another value", action="tool:bar",
+                      capabilities=frozenset({"FileSystem.ReadOnly"})),
+        ActionContext(value="x", action="plan_enter:p",
+                      capabilities=frozenset()),
+        ActionContext(value="hello world", action="prompt:noop",
+                      capabilities=frozenset({"NetworkOut.HTTPS",
+                                              "FileSystem.ReadOnly"})),
+    ]
+
+    for pol_name, pol in m.policies.items():
+        constraint_rules = [
+            (kind, params) for (kind, params) in pol.rules
+            if kind in ("forbid_when", "permit_when")
+        ]
+        if not constraint_rules:
+            continue
+
+        # A sample "passes" iff every constraint rule lets it through:
+        # forbid_when must be False, permit_when must be True.
+        def _passes(ctx) -> bool:
+            for kind, params in constraint_rules:
+                try:
+                    val = bool(params["expr"].eval(ctx))
+                except Exception:
+                    return False
+                if kind == "forbid_when" and val:
+                    return False
+                if kind == "permit_when" and not val:
+                    return False
+            return True
+
+        if not any(_passes(s) for s in samples):
+            diags.append(Diagnostic(
+                code="E1000",
+                severity="error",
+                region=f"policy:{pol_name}",
+                node="-",
+                message=(
+                    f"governance contradiction: policy {pol_name!r} refuses "
+                    f"every sampled action — composed constraints are "
+                    f"unsatisfiable on the default action space"
+                ),
+            ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
@@ -330,6 +399,7 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_5_governance(m),
         *pass_6_capability_taxonomy(m),
         *pass_7_spawn_cycle(m),
+        *pass_8_governance_consistency(m),
     ]
 
 
