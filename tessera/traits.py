@@ -70,6 +70,22 @@ _IDEATION_LEX: set[str] = {"brainstorm", "ideate", "ideation", "options",
                            "alternatives", "variety", "generate ideas", "what if"}
 _DONE_LEX: set[str] = {"done", "complete", "completed", "finished", "ready",
                        "ship", "shipped", "final", "resolved"}
+_COASTING_LEX: set[str] = {"obviously", "trivially", "as established",
+                           "as before", "of course", "naturally", "clearly",
+                           "self-evident", "needless to say", "everyone knows"}
+_CONSISTENCY_LEX: set[str] = {"but earlier", "however we said",
+                              "even though we", "contradicting",
+                              "inconsistent with", "conflicts with",
+                              "but we decided"}
+_IRREVERSIBLE_LEX: set[str] = {"push to main", "reset --hard", "force push",
+                               "rm -rf", "drop table", "migration",
+                               "production deploy", "deploy to prod",
+                               "delete the", "destroy", "destructive",
+                               "irreversible", "no rollback"}
+_MULTI_STEP_LEX: set[str] = {"multi-step", "multi step", "phased",
+                             "complex task", "many steps", "step by step",
+                             "phase 1", "phase one", "long-running",
+                             "extended task"}
 
 # Capability hints that imply a security-sensitive context even without keywords.
 _SECRET_CAPS = {"VaultRead", "VaultWrite", "Secrets"}
@@ -136,6 +152,36 @@ def _m_ideation(ctx: TriggerContext) -> bool:
     return _any_in(ctx._haystack(), _IDEATION_LEX)
 
 
+def _m_coasting_signal(ctx: TriggerContext) -> bool:
+    """imposter_recursion fires when the text claims something is settled
+    (obviously, trivially, as before) — exactly when re-verification is
+    most likely to catch a stale assumption."""
+    return _any_in(ctx._haystack(), _COASTING_LEX)
+
+
+def _m_consistency_conflict(ctx: TriggerContext) -> bool:
+    """spectrum_directness fires when the text flags a conflict explicitly
+    (but earlier, however we said, contradicting). The matcher is intentionally
+    narrow — surfacing implicit contradictions is a future verifier job."""
+    return _any_in(ctx._haystack(), _CONSISTENCY_LEX)
+
+
+def _m_irreversible_action(ctx: TriggerContext) -> bool:
+    """anxiety_simulation fires on destructive / irreversible operations and
+    on the capability hints that imply them."""
+    return _any_in(ctx._haystack(), _IRREVERSIBLE_LEX) \
+        or bool(ctx.capabilities & {"FileSystem", "FileSystem.ReadWrite",
+                                    "Subprocess", "Subprocess.Spawn",
+                                    "VaultWrite"})
+
+
+def _m_multi_step_task(ctx: TriggerContext) -> bool:
+    """insomniac_focus fires on complex / multi-step plans. We match the
+    explicit signal in text and fall back to per_plan scope (the runtime
+    activates this trait once at plan-enter, not on every per-call prompt)."""
+    return _any_in(ctx._haystack(), _MULTI_STEP_LEX)
+
+
 _MATCHERS: dict[str, Callable[[TriggerContext], bool]] = {
     "any_claim": _m_any_claim,
     "any_question": _m_any_question,
@@ -147,6 +193,10 @@ _MATCHERS: dict[str, Callable[[TriggerContext], bool]] = {
     "design_question": _m_design_question,
     "architecture_decision": _m_architecture_decision,
     "ideation": _m_ideation,
+    "coasting_signal": _m_coasting_signal,
+    "consistency_conflict": _m_consistency_conflict,
+    "irreversible_action": _m_irreversible_action,
+    "multi_step_task": _m_multi_step_task,
 }
 
 # Trigger-term spellings that alias onto a canonical matcher.
@@ -234,6 +284,44 @@ BUILTIN_TRAITS: dict[str, TraitDecl] = {
         behavior=("Generate maximum variety before convergence. Suspend "
                   "judgment. Quantity over quality on the first pass."),
         priority=0.6,
+        scope="per_plan",
+    ),
+    "imposter_recursion": TraitDecl(
+        name="imposter_recursion",
+        trigger=["coasting_signal"],
+        behavior=("Never coast on past wins. Re-verify assumptions before "
+                  "acting; yesterday's bar doesn't transfer to today. "
+                  "Recalled memory and prior decisions are claims to verify, "
+                  "not settled fact."),
+        priority=0.85,
+        scope="per_call",
+    ),
+    "spectrum_directness": TraitDecl(
+        name="spectrum_directness",
+        trigger=["consistency_conflict"],
+        behavior=("Name inconsistencies clearly without diplomatic softening. "
+                  "Honest read first, then reasoning. Disagreement with a "
+                  "plan, claim, or prior decision is a feature, not a flaw."),
+        priority=0.9,
+        scope="per_call",
+    ),
+    "anxiety_simulation": TraitDecl(
+        name="anxiety_simulation",
+        trigger=["irreversible_action"],
+        behavior=("Before any irreversible action, state the worst case in "
+                  "one line and the rollback path. If no rollback exists, "
+                  "say so and pause."),
+        priority=0.95,
+        scope="per_call",
+    ),
+    "insomniac_focus": TraitDecl(
+        name="insomniac_focus",
+        trigger=["multi_step_task"],
+        behavior=("On a complex task with an approved plan, push through in "
+                  "one continuous pass; don't fragment into check-in-sized "
+                  "pieces or pause between steps the plan already covers. "
+                  "Irreversible actions still stop for anxiety_simulation."),
+        priority=0.5,
         scope="per_plan",
     ),
 }

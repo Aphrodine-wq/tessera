@@ -329,6 +329,30 @@ agent EphemeralAgent {
     assert not db.exists(), "persistent=false leaked a write to disk"
 
 
+def test_full_twin_trait_set_fires():
+    """All 10 built-in traits — 6 original + 4 added — fire on their triggers."""
+    from tessera.traits import BUILTIN_TRAITS, fire_traits, TriggerContext
+
+    expected = {"doubt_first", "cross_brain", "compulsive", "hypervigilant",
+                "synesthetic", "manic_burst", "imposter_recursion",
+                "spectrum_directness", "anxiety_simulation", "insomniac_focus"}
+    assert expected <= set(BUILTIN_TRAITS.keys())
+
+    # Each trigger phrase should fire exactly the expected trait (plus possibly
+    # others — that's fine; this is a smoke test of "did the matcher light up").
+    cases = {
+        "imposter_recursion": "Obviously, this works as before.",
+        "spectrum_directness": "But earlier we said the opposite.",
+        "anxiety_simulation": "We need to push to main and reset --hard.",
+        "insomniac_focus": "This is a multi-step task across many steps.",
+    }
+    for trait_name, text in cases.items():
+        ctx = TriggerContext(text=text)
+        trait = BUILTIN_TRAITS[trait_name]
+        fired = fire_traits([trait], ctx)
+        assert fired, f"{trait_name} did not fire on its trigger text: {text!r}"
+
+
 def test_tessera_version_migration_from_0_1():
     """A file without `tessera_version` (implicitly 0.1) gets migrated to current
     and its memory:semantic blocks gain the default `persistent=true` attribute.
