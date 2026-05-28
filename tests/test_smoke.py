@@ -428,6 +428,46 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_trainable_neural_parses_and_carries_config():
+    """A `model X { ... } trainable { optimizer: adam(lr=1e-3); epochs: 5 }`
+    block parses and the NeuralModelDecl carries the training fields."""
+    from tessera.parser.module import parse_source
+    src = """---
+agent: Perception
+tessera_version: 0.2
+---
+
+```tsr:neural
+model classifier {
+  linear in=4 out=8
+  relu
+  linear in=8 out=2
+} trainable {
+  optimizer: adam(lr=0.005)
+  epochs: 7
+  loss: mse
+  batch_size: 16
+}
+```
+
+```tsr:agent
+agent Perception {
+  beliefs: @last_write x: String
+  intentions: plan p { return "ok" }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    decl = module.neural_models["classifier"]
+    assert decl.trainable is True
+    assert decl.optimizer == "adam"
+    assert decl.learning_rate == 0.005
+    assert decl.epochs == 7
+    assert decl.loss == "mse"
+    assert decl.batch_size == 16
+
+
 def test_recv_timeout_parses_per_recv_clause():
     """The `recv from X timeout 0.5s` syntax parses and the SIR Recv node
     carries the timeout in its attributes. (Full runtime deadlock test is

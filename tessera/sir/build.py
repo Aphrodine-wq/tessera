@@ -1227,6 +1227,13 @@ def _lower_knowledge(block: SubstrateBlock, mod: Module) -> None:
         )
 
 
+_TRAINABLE_HEAD_RE = re.compile(r"trainable\s*\{")
+_OPT_RE = re.compile(r"optimizer\s*:\s*(adam|sgd)(?:\s*\(\s*lr\s*=\s*([0-9.eE+-]+)\s*\))?")
+_EPOCHS_RE = re.compile(r"epochs\s*:\s*(\d+)")
+_LOSS_RE = re.compile(r"loss\s*:\s*(\w+)")
+_BATCH_RE = re.compile(r"batch_size\s*:\s*(\d+)")
+
+
 def _lower_neural(block: SubstrateBlock, mod: Module) -> None:
     src = block.body
     m = _MODEL_HEAD_RE.search(src)
@@ -1234,7 +1241,7 @@ def _lower_neural(block: SubstrateBlock, mod: Module) -> None:
         raise SyntaxFail("expected `model Name { ... }`")
     name = m.group(1)
     brace = src.index("{", m.end() - 1)
-    body, _ = _balanced_extract(src, brace)
+    body, body_end = _balanced_extract(src, brace)
     layers: list[dict] = []
     for raw in body.splitlines():
         line = raw.strip().rstrip(";")
@@ -1249,7 +1256,29 @@ def _lower_neural(block: SubstrateBlock, mod: Module) -> None:
                 k, _, v = kv.partition("=")
                 layer[k.strip()] = int(v.strip()) if v.strip().lstrip("-").isdigit() else v.strip()
         layers.append(layer)
-    mod.neural_models[name] = NeuralModelDecl(name=name, layers=layers)
+    decl = NeuralModelDecl(name=name, layers=layers)
+    # Optional `trainable { ... }` clause after the model body.
+    tail = src[body_end:]
+    tm = _TRAINABLE_HEAD_RE.search(tail)
+    if tm:
+        t_brace = tail.index("{", tm.end() - 1)
+        t_body, _ = _balanced_extract(tail, t_brace)
+        decl.trainable = True
+        opt_m = _OPT_RE.search(t_body)
+        if opt_m:
+            decl.optimizer = opt_m.group(1)
+            if opt_m.group(2):
+                decl.learning_rate = float(opt_m.group(2))
+        ep_m = _EPOCHS_RE.search(t_body)
+        if ep_m:
+            decl.epochs = int(ep_m.group(1))
+        ls_m = _LOSS_RE.search(t_body)
+        if ls_m:
+            decl.loss = ls_m.group(1)
+        bs_m = _BATCH_RE.search(t_body)
+        if bs_m:
+            decl.batch_size = int(bs_m.group(1))
+    mod.neural_models[name] = decl
 
 
 def lower(pm: ParsedModule) -> Module:

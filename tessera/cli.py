@@ -19,7 +19,8 @@ from .verify.passes import run_local
 def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = False,
                  run: str | None = None,
                  sets: list[str] | None = None, audit: str | None = None,
-                 sequential: bool = False) -> int:
+                 sequential: bool = False,
+                 train: bool = False) -> int:
     pm = parse_file(file)
     module = lower(pm)
     sir_text = emit_module(module)
@@ -38,6 +39,15 @@ def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = Fal
     if errors:
         print(f"\n{len(errors)} error(s)")
         return 1
+
+    if train:
+        from .training import train_all_trainable
+        paths = train_all_trainable(module)
+        if not paths:
+            print("no trainable models found in this file")
+        else:
+            for p in paths:
+                print(f"trained checkpoint → {p}")
 
     if run:
         from .interp.eval import World
@@ -64,6 +74,7 @@ def _cmd_compile(args: argparse.Namespace) -> int:
         sets=args.set,
         audit=args.audit,
         sequential=args.sequential,
+        train=args.train,
     )
 
 
@@ -230,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     cp.add_argument("--aeon", action="store_true")
     cp.add_argument("--sequential", action="store_true",
                     help="Disable concurrent actor scheduling (default is concurrent)")
+    cp.add_argument("--train", action="store_true",
+                    help="Train every `trainable` neural model and write checkpoints")
     cp.add_argument("--run", metavar="AGENT")
     cp.add_argument("--set", action="append")
     cp.add_argument("--audit", metavar="OUT", help="write the run's audit trace as JSONL")

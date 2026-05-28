@@ -72,18 +72,29 @@ def compile_model(decl: NeuralModelDecl) -> Any:
 
 
 def forward(decl: NeuralModelDecl, *inputs: Any) -> Any:
-    """Run forward inference on the compiled model."""
+    """Run forward inference on the compiled model.
+
+    If the model is `trainable` and a checkpoint exists at
+    `~/.tessera/checkpoints/<name>.pt`, the checkpoint is loaded once and
+    cached alongside the compiled model. Subsequent forwards reuse the
+    loaded weights.
+    """
     torch = _torch()
     model = compile_model(decl)
+
+    if getattr(decl, "trainable", False) and not getattr(model, "_tessera_ckpt_loaded", False):
+        from ..training import load_checkpoint_if_present
+        if load_checkpoint_if_present(model, decl.name):
+            model._tessera_ckpt_loaded = True
 
     # Coerce raw lists / scalars into tensors
     tensor_args = [
         x if hasattr(x, "shape") else torch.tensor(x, dtype=torch.float32)
         for x in inputs
     ]
+    model.eval()
     with torch.no_grad():
         out = model(*tensor_args)
-    # Return tensor as-is — caller (interpreter) decides what to do with it
     return out
 
 

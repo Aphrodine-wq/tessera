@@ -198,9 +198,21 @@ class ToolDecl:
 
 @dataclass
 class NeuralModelDecl:
-    """Declared neural model — compiled lazily to a torch nn.Module."""
+    """Declared neural model — compiled lazily to a torch nn.Module.
+
+    `trainable` and the surrounding fields are populated when the author
+    declares a `trainable { ... }` clause inside the `model` block. The
+    runtime checks for a checkpoint at `~/.tessera/checkpoints/<name>.pt`
+    and loads it before forward when training has previously run.
+    """
     name: str
     layers: list[dict]   # ordered: [{kind: "linear", in: 784, out: 128}, {kind: "relu"}, ...]
+    trainable: bool = False
+    optimizer: str = "adam"        # "adam" | "sgd"
+    learning_rate: float = 1e-3
+    epochs: int = 50
+    loss: str = "mse"              # "mse" | "cross_entropy"
+    batch_size: int = 32
 
 
 @dataclass
