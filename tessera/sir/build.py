@@ -253,14 +253,28 @@ def _emit_primary(p: _Parser, region: Region, block: SubstrateBlock) -> str:
         ))
         return n.id
 
-    # `recv from refExpr`
+    # `recv from refExpr [timeout Ns]`
     if tok == "recv":
         p.eat("recv")
         p.eat("from")
         ref_id = _emit_primary(p, region, block)
+        timeout_s: float | None = None
+        if p.peek() == "timeout":
+            p.eat("timeout")
+            tok_val = p.eat()
+            # Accept "5s", "5.0s", "30", "30s"
+            v = tok_val.rstrip("s")
+            try:
+                timeout_s = float(v)
+            except ValueError:
+                raise SyntaxFail(f"recv timeout expects a number (got {tok_val!r})")
+        attrs: dict = {}
+        if timeout_s is not None:
+            attrs["timeout_s"] = timeout_s
         n = region.add(Node(
             op=Op.Recv,
             inputs=[ref_id],
+            attributes=attrs,
             substrate="agent",
             effects={Effect.msg_recv.value},
             output_type="any",

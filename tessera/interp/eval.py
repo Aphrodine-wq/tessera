@@ -570,12 +570,37 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         if target_name is None:
             raise RuntimeError_(f"recv target is not an agent ref: {ref!r}")
         child = world.state_for(target_name)
+        # Resolve timeout: per-recv attribute > env var > default 30s.
+        import os as _os
+        from concurrent.futures import TimeoutError as _FutTimeout
+        per_recv = n.attributes.get("timeout_s")
+        env = _os.environ.get("TESSERA_RECV_TIMEOUT_S")
+        try:
+            timeout_s = float(per_recv) if per_recv is not None else (
+                float(env) if env else 30.0
+            )
+        except (TypeError, ValueError):
+            timeout_s = 30.0
         # Concurrent path: if a future is in flight from the Send-eager submit,
-        # block on it; otherwise run inline.
+        # block on it with the timeout; on timeout emit a deadlock_suspected
+        # audit event and return a Refusal.
         if world.concurrent and child.pending_future is not None:
             fut = child.pending_future
-            child.pending_future = None
-            return fut.result()
+            try:
+                result = fut.result(timeout=timeout_s)
+                child.pending_future = None
+                return result
+            except _FutTimeout:
+                world.record(
+                    agent_name,
+                    "deadlock_suspected",
+                    waiting_on=target_name,
+                    timeout_s=timeout_s,
+                )
+                return Refusal(
+                    reason=f"recv from {target_name} timed out after {timeout_s}s",
+                    policy="<recv_timeout>",
+                )
         return _run_child_and_collect(world, target_name)
 
     if op is Op.Workspace_Broadcast:

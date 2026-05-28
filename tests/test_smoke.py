@@ -428,6 +428,53 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_recv_timeout_parses_per_recv_clause():
+    """The `recv from X timeout 0.5s` syntax parses and the SIR Recv node
+    carries the timeout in its attributes. (Full runtime deadlock test is
+    hard to engineer deterministically — kept as a unit-level check.)"""
+    from tessera.parser.module import parse_source
+    from tessera.sir.nodes import Op
+    src = """---
+agent: A
+tessera_version: 0.2
+---
+
+```tsr:agent
+agent A {
+  beliefs:
+    @last_write x: String
+  intentions:
+    plan p {
+      let r = spawn B with []
+      let msg = recv from r timeout 0.5s
+      return msg
+    }
+}
+
+agent B {
+  beliefs:
+    @last_write x: String
+  intentions:
+    plan q {
+      return "done"
+    }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    # Walk regions for the plan p of agent A and find the Recv node
+    found_timeout = None
+    for region in module.regions:
+        for node in region.nodes:
+            if node.op is Op.Recv and "timeout_s" in node.attributes:
+                found_timeout = node.attributes["timeout_s"]
+    assert found_timeout == 0.5, f"expected per-recv timeout 0.5s, got {found_timeout}"
+
+
+def test_policy_constraint_forbid_when_contains_pii():
+
+
 def test_policy_constraint_forbid_when_contains_pii():
     """A policy `forbid when contains_pii(value)` refuses a value with PII."""
     from tessera.parser.module import parse_source
