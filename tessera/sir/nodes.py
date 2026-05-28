@@ -265,6 +265,14 @@ class SkillDecl:
     return_type: str
     binds_to_kind: str              # "model" | "prompt" | "tool" | "fn"
     binds_to_name: str
+    # Promotion plumbing (decision 16). `promote_to="neural"` means: after
+    # `promote_threshold` calls accumulate in the operational audit store,
+    # the runtime emits a `skill_promotion_pending` event. Actual training
+    # (training corpus assembly, vast.ai job, checkpoint swap) is a
+    # follow-up that consumes those events; this commit only lights the
+    # signal so the surface is callable.
+    promote_to: str | None = None
+    promote_threshold: int = 100
 
 
 @dataclass

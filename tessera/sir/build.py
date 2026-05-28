@@ -896,8 +896,11 @@ _EVAL_EXPECT_EQUALS_RE = re.compile(r'expect_equals\s*=\s*"([^"]*)"')
 _EVAL_EXPECT_REFUSAL_RE = re.compile(r'expect_refusal\s*=\s*(true|false)')
 
 _PROCEDURAL_HEAD_RE = re.compile(r"procedural\s*\{")
+# `skill name(params) -> T from <kind> Y` optionally followed by
+# `promote_to: neural { threshold: N }` on the same or next non-blank line.
 _SKILL_DECL_RE = re.compile(
     r"skill\s+(\w+)\s*\(([^)]*)\)\s*->\s*(\w+)\s+from\s+(model|prompt|tool|fn)\s+(\w+)"
+    r"(?:\s+promote_to\s*:\s*(\w+)(?:\s*\{\s*threshold\s*:\s*(\d+)\s*\})?)?"
 )
 
 
@@ -1020,13 +1023,15 @@ def _lower_procedural(block: SubstrateBlock, mod: Module) -> None:
     brace = src.index("{", m.end() - 1)
     body, _ = _balanced_extract(src, brace)
     for sm in _SKILL_DECL_RE.finditer(body):
-        name, params_src, ret_t, kind, target = sm.groups()
+        name, params_src, ret_t, kind, target, promote_to, threshold = sm.groups()
         mod.skills[name] = SkillDecl(
             name=name,
             params=_parse_typed_params(params_src),
             return_type=ret_t.strip(),
             binds_to_kind=kind,
             binds_to_name=target,
+            promote_to=promote_to or None,
+            promote_threshold=int(threshold) if threshold else 100,
         )
 
 

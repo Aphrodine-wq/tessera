@@ -428,6 +428,52 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_skill_promote_to_neural_emits_pending_event():
+    """A skill declared `promote_to: neural { threshold: 3 }` fires a
+    skill_promotion_pending audit event on its 3rd call (and only once)."""
+    from tessera.adapters.audit import query_events
+    from tessera.parser.module import parse_source
+    src = """---
+agent: Summarizer
+tessera_version: 0.2
+---
+
+```tsr:logic
+fn brief(t: String) -> String = t
+```
+
+```tsr:memory:procedural
+procedural {
+  skill summarize(t: String) -> String from fn brief promote_to: neural { threshold: 3 }
+}
+```
+
+```tsr:agent
+agent Summarizer {
+  beliefs:
+    @last_write text: String
+  intentions:
+    plan run {
+      let a = summarize(text)
+      let b = summarize(text)
+      let c = summarize(text)
+      let d = summarize(text)
+      return d
+    }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    assert module.skills["summarize"].promote_to == "neural"
+    assert module.skills["summarize"].promote_threshold == 3
+    run_agent(module, "Summarizer", initial_beliefs={"text": "hello"})
+    rows = query_events(action="skill_promotion_pending", limit=10)
+    assert len(rows) == 1, f"expected exactly one promotion-pending event, got {len(rows)}"
+    assert rows[0]["skill_name"] == "summarize"
+    assert rows[0]["call_count"] >= 3
+
+
 def test_audit_tiering_governance_vs_operational():
     """ethics_applied events land in governance; plain prompt calls in operational."""
     import sqlite3

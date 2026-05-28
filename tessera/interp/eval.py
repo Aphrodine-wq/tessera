@@ -826,8 +826,25 @@ def _invoke_skill(skill, arg_vals, world, agent_name):
                  binds_to=f"{skill.binds_to_kind}:{skill.binds_to_name}")
     stats = world.region_results.setdefault("_skill_stats", {})
     counter = stats.setdefault(skill.name, {"calls": 0, "kind": skill.binds_to_kind,
-                                            "target": skill.binds_to_name})
+                                            "target": skill.binds_to_name,
+                                            "promotion_signaled": False})
     counter["calls"] += 1
+    # Promotion plumbing (decision 16): when a skill declared `promote_to: neural`
+    # crosses its threshold, emit a one-shot audit event so a future training
+    # job can find it. Does NOT train; just lights the signal.
+    if (skill.promote_to == "neural"
+            and counter["calls"] >= skill.promote_threshold
+            and not counter["promotion_signaled"]):
+        counter["promotion_signaled"] = True
+        world.record(
+            agent_name,
+            f"skill_promotion_pending:{skill.name}",
+            skill_name=skill.name,
+            binds_to_kind=skill.binds_to_kind,
+            binds_to_name=skill.binds_to_name,
+            promote_to=skill.promote_to,
+            call_count=counter["calls"],
+        )
     cache = world.region_results.setdefault("_skill_cache", {})
     # cheap input-keyed cache: repeated calls with same args short-circuit
     cache_key = (skill.name, tuple(repr(a) for a in arg_vals))
