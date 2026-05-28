@@ -182,6 +182,24 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
+def _cmd_audit_query(args: argparse.Namespace) -> int:
+    from .adapters.audit import query_events
+    import json
+    rows = query_events(
+        agent=args.agent,
+        intent=args.intent,
+        action=args.action,
+        since=args.since,
+        until=args.until,
+        limit=args.limit,
+    )
+    for r in rows:
+        print(json.dumps(r))
+    if args.count:
+        print(f"# {len(rows)} event(s)", file=sys.stderr)
+    return 0
+
+
 def _cmd_version(_args: argparse.Namespace) -> int:
     print(f"tessera {__version__}")
     return 0
@@ -241,6 +259,20 @@ def main(argv: list[str] | None = None) -> int:
     ep.add_argument("file")
     ep.add_argument("--agent", help="Override which agent to run cases against")
     ep.set_defaults(fn=_cmd_eval)
+
+    # audit — query the persistent audit store
+    aud = sub.add_parser("audit", help="Query the persistent audit store")
+    audsub = aud.add_subparsers(dest="audit_cmd", required=True)
+    audq = audsub.add_parser("query", help="Filter events by agent/intent/action/time")
+    audq.add_argument("--agent")
+    audq.add_argument("--intent")
+    audq.add_argument("--action", help="substring or LIKE pattern")
+    audq.add_argument("--since", help="ISO timestamp (>=)")
+    audq.add_argument("--until", help="ISO timestamp (<=)")
+    audq.add_argument("--limit", type=int, default=100)
+    audq.add_argument("--count", action="store_true",
+                      help="Print row count to stderr after results")
+    audq.set_defaults(fn=_cmd_audit_query)
 
     # version
     verp = sub.add_parser("version")

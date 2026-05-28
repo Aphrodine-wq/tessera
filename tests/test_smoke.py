@@ -329,6 +329,31 @@ agent EphemeralAgent {
     assert not db.exists(), "persistent=false leaked a write to disk"
 
 
+def test_audit_persists_and_queries():
+    """Running an agent populates the audit store; query_events returns rows."""
+    from tessera.adapters.audit import query_events
+    pm = parse_file(HELLO)
+    module = lower(pm)
+    run_agent(module, "HelloAgent", initial_beliefs={"target": "world"})
+    rows = query_events(agent="HelloAgent", limit=50)
+    assert len(rows) >= 1
+    assert all(r["agent"] == "HelloAgent" for r in rows)
+    # plan_enter is one of the audit actions emitted
+    assert any(r["action"].startswith("plan_enter") for r in rows)
+
+
+def test_audit_filters_by_intent():
+    """query_events with --intent filter returns only matching events."""
+    from tessera.adapters.audit import query_events
+    AUDITABLE = Path(__file__).parent.parent / "examples" / "auditable_estimator.t.md"
+    pm = parse_file(AUDITABLE)
+    module = lower(pm)
+    run_agent(module, "Estimator", initial_beliefs={"job": "test"})
+    rows = query_events(intent="produce_estimate", limit=50)
+    assert rows, "expected at least one event under intent=produce_estimate"
+    assert all(r["intent"] == "produce_estimate" for r in rows)
+
+
 def test_full_twin_trait_set_fires():
     """All 10 built-in traits — 6 original + 4 added — fire on their triggers."""
     from tessera.traits import BUILTIN_TRAITS, fire_traits, TriggerContext

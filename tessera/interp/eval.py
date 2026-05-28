@@ -199,14 +199,20 @@ class World:
         if intent is None and agent_name and agent_name in self.module.agents:
             intent = self.module.agents[agent_name].intent
         self._audit_seq += 1
-        self.audit.append(AuditEvent(
+        evt = AuditEvent(
             seq=self._audit_seq,
             agent=agent_name,
             plan=frame.name if frame else None,
             intent=intent,
             action=action,
             detail=detail,
-        ))
+        )
+        self.audit.append(evt)
+        try:
+            from ..adapters.audit import record_event
+            record_event(evt.to_dict())
+        except Exception:
+            pass
 
     def ensure_workspace(self, name: str) -> WorkspaceState:
         if name not in self.workspaces:
