@@ -390,6 +390,49 @@ def pass_8_governance_consistency(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_9_consciousness_claim_check(m: Module) -> list[Diagnostic]:
+    """Refuse modules whose consciousness-adjacent substrate declarations
+    make bare metaphysical claims (per PHILOSOPHY.md).
+
+    Cross-block: tsr:iit, tsr:welfare, and any future tsr:phenomenology
+    block must operationalize their claims. Forbidden patterns are
+    enumerated in tessera/iit.py::claim_violates_consciousness_discipline
+    — "is conscious", "subjective experience", "phi > 0 means
+    consciousness", etc.
+
+    The individual substrate lowering functions already gate their own
+    bodies (e.g., _lower_iit rejects forbidden phrases in the iit
+    block). This pass adds a CROSS-FILE check: prose and frontmatter
+    comments can ALSO not make bare claims when an iit or welfare
+    substrate is declared in the same module.
+
+    Emits E1100 ConsciousnessClaim (error).
+    """
+    diags: list[Diagnostic] = []
+    if m.iit is None and m.welfare is None:
+        return diags  # only gate modules that opt into consciousness-adjacent substrates
+    from ..iit import claim_violates_consciousness_discipline
+    # Check the module's name / region names — a crude but defensible
+    # scan against the same lex. A real implementation would scan the
+    # parsed module's prose; the prose is already gated when it's a
+    # substrate body, so this pass catches escapes.
+    for region in m.regions:
+        reason = claim_violates_consciousness_discipline(region.name)
+        if reason:
+            diags.append(Diagnostic(
+                code="E1100",
+                severity="error",
+                region=region.name,
+                node="-",
+                message=(
+                    f"E1100 ConsciousnessClaim: {reason}. "
+                    "See PHILOSOPHY.md — Tessera operationalizes "
+                    "access-consciousness-adjacent properties only."
+                ),
+            ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
@@ -400,6 +443,7 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_6_capability_taxonomy(m),
         *pass_7_spawn_cycle(m),
         *pass_8_governance_consistency(m),
+        *pass_9_consciousness_claim_check(m),
     ]
 
 

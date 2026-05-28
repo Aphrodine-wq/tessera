@@ -71,7 +71,7 @@ entry links here.
 
 ## Consciousness-adjacent measurable substrates
 
-### `tsr:iit` (research C1) — planned
+### `tsr:iit` (research C1) — SHIPPED
 
 - **References:**
   - Tononi, G. (2004). *An information integration theory of
@@ -110,7 +110,7 @@ entry links here.
   subjective experience. The substrate ships the measure; the
   metaphysics is left for philosophy of mind.
 
-### `tsr:tom` (research C3) — planned
+### `tsr:tom` (research C3) — SHIPPED
 
 - **References:**
   - Premack, D., Woodruff, G. (1978). *Does the chimpanzee have a
@@ -121,7 +121,7 @@ entry links here.
     S. M. A., Botvinick, M. (2018). *Machine theory of mind.* ICML.
     arXiv:1802.07740.
 
-### `tsr:welfare` (research C4) — planned
+### `tsr:welfare` (research C4) — SHIPPED
 
 - **Reference:** Birch, J. (2020). *The search for invertebrate
   consciousness.* Noûs, 54(1), 133–155.
@@ -134,6 +134,34 @@ entry links here.
   matter; the moral-status question is left to ethicists.
 
 ## Reasoning / inference
+
+### `tsr:dual_process` (research 4.1) — SHIPPED (engine; substrate decl pending)
+
+- **References:**
+  - Kahneman, D. (2011). *Thinking, Fast and Slow.* Farrar, Straus and Giroux.
+  - Evans, J. St. B. T., Stanovich, K. E. (2013). *Dual-process theories of higher cognition: advancing the debate.* Perspectives on Psychological Science, 8(3), 223–241.
+- **Operationalized claim:** A router can pick fast (cached / pattern-match) vs slow (deliberative) based on confidence + budget + irreversibility, with the chosen mode audit-emitted per action.
+- **What we do NOT claim:** That cognition is genuinely discrete-dual. Evans & Stanovich (2013) acknowledge the abstraction's edges.
+
+### `tsr:counterfactual` (research 4.2) — SHIPPED (engine; substrate decl pending)
+
+- **References:**
+  - Lewis, D. (1973). *Counterfactuals.* Harvard University Press.
+  - Halpern, J. Y. (2016). *Actual Causality.* MIT Press.
+  - Pearl, J. (2009). *Causality* (2nd ed.), Ch. 7.
+- **Operationalized claim:** Deterministic structural counterfactuals via Pearl's ABDUCTION → ACTION → PREDICTION recipe over a declared causal DAG; inconsistent observations return (None, None) signalling non-identifiability.
+- **What we do NOT claim:** Stochastic counterfactual identifiability. MVP is deterministic structural equations.
+
+### `tsr:abductive` (research 4.3) — SHIPPED (engine; substrate decl pending)
+
+- **References:**
+  - Peirce, C. S. (1903). *Pragmatism as a Principle and Method of Right Thinking.* Harvard lectures.
+  - Lipton, P. (2004). *Inference to the Best Explanation* (2nd ed.). Routledge.
+  - Douven, I. (2017). *Abduction.* Stanford Encyclopedia of Philosophy.
+- **Operationalized claim:** Ranked hypotheses by posterior = prior × likelihood × parsimony; below-threshold winner returns None (anti-overconfidence).
+- **What we do NOT claim:** That "best" captures Lipton's LOVELINESS dimension. We rank by likeliness only; loveliness is a follow-up.
+
+
 
 ### `tsr:causal` (research D1)
 
