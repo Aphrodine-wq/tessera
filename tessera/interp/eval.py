@@ -465,18 +465,30 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
     if op is Op.Spawn:
         target_name = n.attributes.get("agent")
         requested_caps = set(n.attributes.get("capabilities") or [])
+        # Auto-restrict (decision 10): child runs with the intersection of
+        # (parent caps, child's declared caps). When the granted set is
+        # smaller than what was requested, audit the narrowing so the
+        # delta is queryable later via tessera audit query.
+        from ..capabilities import intersect
         if agent_name is not None:
             parent = world.state_for(agent_name)
-            unauthorized = requested_caps - parent.capabilities
-            if unauthorized:
-                raise RuntimeError_(
-                    f"agent {agent_name!r} cannot grant capabilities it does not hold: {sorted(unauthorized)}"
-                )
+            granted = intersect(parent.capabilities, requested_caps)
+        else:
+            granted = set(requested_caps)
+        dropped = requested_caps - granted
         # Create the child state with granted caps.
         child = world.state_for(target_name)
-        child.capabilities |= requested_caps
-        world.spawn_log.append(f"{agent_name or '<root>'} -> {target_name} with {sorted(requested_caps)}")
-        world.record(agent_name, f"spawn:{target_name}", caps_granted=sorted(requested_caps))
+        child.capabilities |= granted
+        world.spawn_log.append(f"{agent_name or '<root>'} -> {target_name} with {sorted(granted)}")
+        world.record(agent_name, f"spawn:{target_name}", caps_granted=sorted(granted))
+        if dropped:
+            world.record(
+                agent_name,
+                f"caps_narrowed:{target_name}",
+                requested=sorted(requested_caps),
+                granted=sorted(granted),
+                dropped=sorted(dropped),
+            )
         return f"<agent:{target_name}>"
 
     if op is Op.Send:

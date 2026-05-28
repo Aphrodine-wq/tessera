@@ -813,21 +813,27 @@ def test_torch_adapter_skips_gracefully_without_torch():
             assert "torch" in str(e)
 
 
-def test_spawn_refuses_unheld_capabilities():
-    """Spawn must reject capability grants beyond what the parent holds."""
+def test_spawn_auto_restricts_unheld_capabilities():
+    """Spawn narrows the child's caps to the parent's intersection (decision 10).
+    Caps the parent doesn't hold get dropped and the narrowing is audited."""
+    from tessera.adapters.audit import query_events
     pm = parse_file(RESEARCHER)
     module = lower(pm)
-    from tessera.interp.eval import RuntimeError_, World, eval_region
+    from tessera.interp.eval import World, eval_region
     world = World(module=module)
     state = world.state_for("TeamLead")
-    # Deliberately do NOT grant NetworkOut.
+    # Deliberately do NOT grant NetworkOut to the parent.
     state.working_memory["topic"] = "x"
-    raised = False
-    try:
-        eval_region(module.agents["TeamLead"], world, agent_name="TeamLead")
-    except RuntimeError_ as e:
-        raised = "NetworkOut" in str(e)
-    assert raised, "expected RuntimeError_ when spawning without held capability"
+    # Should not raise — auto-restrict narrows the spawn.
+    eval_region(module.agents["TeamLead"], world, agent_name="TeamLead")
+    rows = query_events(action="caps_narrowed", limit=20)
+    assert rows, "expected at least one caps_narrowed audit event"
+    # NetworkOut (or NetworkOut.Any after normalize) should be in dropped.
+    dropped = set()
+    for r in rows:
+        dropped.update(r.get("dropped") or [])
+    assert any("NetworkOut" in d for d in dropped), \
+        f"expected NetworkOut to be dropped, got: {dropped}"
 
 
 @pytest.mark.skipif(not _aeon_available(), reason="AEON not installed in this venv")
