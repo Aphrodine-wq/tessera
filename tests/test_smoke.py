@@ -329,6 +329,24 @@ agent EphemeralAgent {
     assert not db.exists(), "persistent=false leaked a write to disk"
 
 
+def test_migration_advisor_fires_built_in_traits():
+    """The migration_advisor example resolves built-in traits by name (no
+    tsr:traits block) and records them in audit when their triggers match."""
+    from tessera.adapters.audit import query_events
+    MIGRATION = Path(__file__).parent.parent / "examples" / "migration_advisor.t.md"
+    pm = parse_file(MIGRATION)
+    module = lower(pm)
+    run_agent(module, "MigrationAdvisor",
+              initial_beliefs={"proposal": "drop table jobs; obviously safe"})
+    rows = query_events(agent="MigrationAdvisor", action="prompt")
+    assert rows, "expected a prompt event in audit"
+    fired = set(rows[-1].get("traits_fired") or [])
+    assert "anxiety_simulation" in fired, "destructive proposal should fire anxiety_simulation"
+    assert "imposter_recursion" in fired, "'obviously safe' should fire imposter_recursion"
+    ethics = set(rows[-1].get("ethics_applied") or [])
+    assert ethics == {"no_silent_data_loss", "homeowner_trust"}
+
+
 def test_audit_persists_and_queries():
     """Running an agent populates the audit store; query_events returns rows."""
     from tessera.adapters.audit import query_events

@@ -11,3 +11,6 @@ import pytest
 def isolate_tessera_stores(tmp_path, monkeypatch):
     monkeypatch.setenv("TESSERA_SEMANTIC_DB", str(tmp_path / "semantic.db"))
     monkeypatch.setenv("TESSERA_AUDIT_DB", str(tmp_path / "audit.db"))
+    # Force the deterministic backend in tests so prompts don't hit the
+    # network and so output is reproducible across machines.
+    monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
