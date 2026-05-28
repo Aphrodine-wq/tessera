@@ -212,9 +212,16 @@ class EpisodicEventDecl:
 
 @dataclass
 class KnowledgeSchemaDecl:
-    """A typed schema in a `knowledge { schema FactSheet(field: T, ...) }` block."""
+    """A typed schema in a `knowledge { schema FactSheet(field: T, ...) }` block.
+
+    `persistent=True` writes facts to the local SQLite store (`~/.tessera/semantic.db`)
+    and queries them back across runs. `persistent=False` keeps facts in a per-World
+    shadow that lives only for the duration of the run — useful for tests, dry runs,
+    and any agent that needs semantic structure without disk persistence.
+    """
     name: str
     fields: list[tuple[str, str]]
+    persistent: bool = True
 
 
 @dataclass

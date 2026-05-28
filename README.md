@@ -141,7 +141,7 @@ TESSERA_LLM_BACKEND=noop tessera compile ...        # deterministic stub
 ## Status
 
 - **Lines of code:** ~3.6K Python + 7 example agents
-- **Tests:** 67 passing
+- **Tests:** 69 passing
 - **Shipped substrates:** logic, agent, memory:working, memory:workspace,
   memory:episodic, memory:semantic, prompt, tool, neural
 - **External integrations:** AEON (verify), Obsidian (vault scan + scaffold),

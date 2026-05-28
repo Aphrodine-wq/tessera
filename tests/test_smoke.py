@@ -289,6 +289,72 @@ def test_semantic_substrate_round_trips(tmp_path):
     assert results[0]["fields"]["role"] == "GC"
 
 
+def test_persistent_false_skips_disk_write(tmp_path):
+    """persistent=false on memory:semantic block keeps facts in-process only."""
+    import sqlite3
+    from tessera.parser.module import parse_source
+    src = """---
+agent: EphemeralAgent
+tessera_version: 0.2
+---
+
+```tsr:memory:semantic persistent=false
+knowledge { schema Note(text: String) }
+```
+
+```tsr:agent
+agent EphemeralAgent {
+  beliefs:
+    @last_write topic: String
+  intentions:
+    plan jot {
+      remember Note(text="this should NOT hit the disk")
+      let notes = lookup Note
+      return notes
+    }
+}
+```
+"""
+    db = tmp_path / "semantic.db"
+    import os
+    os.environ["TESSERA_SEMANTIC_DB"] = str(db)
+    pm = parse_source(src, path="<inline>")
+    module = lower(pm)
+    assert module.knowledge_schemas["Note"].persistent is False
+    result = run_agent(module, "EphemeralAgent", initial_beliefs={"topic": "x"})
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["fields"]["text"] == "this should NOT hit the disk"
+    # DB file should never have been created — adapter wasn't called
+    assert not db.exists(), "persistent=false leaked a write to disk"
+
+
+def test_tessera_version_migration_from_0_1():
+    """A file without `tessera_version` (implicitly 0.1) gets migrated to current
+    and its memory:semantic blocks gain the default `persistent=true` attribute.
+    """
+    from tessera.parser.module import parse_source
+    src = """---
+agent: LegacyAgent
+---
+
+```tsr:memory:semantic
+knowledge { schema Old(text: String) }
+```
+
+```tsr:agent
+agent LegacyAgent {
+  beliefs: @last_write topic: String
+  intentions: plan p { return "ok" }
+}
+```
+"""
+    pm = parse_source(src, path="<inline>")
+    assert pm.frontmatter["tessera_version"] == "0.2"
+    sem_block = next(b for b in pm.blocks if b.substrate == "memory:semantic")
+    assert sem_block.attrs.get("persistent") == "true"
+
+
 # ---------------- policy + eval ----------------
 
 

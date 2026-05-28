@@ -1,5 +1,6 @@
 ---
 agent: KnowledgeAssistant
+tessera_version: 0.2
 capabilities_requested: []
 max_cost: { dollars: 0.00, tokens: 0 }
 ---
@@ -11,7 +12,7 @@ subsequent plan invocations. The `memory:semantic` substrate writes through
 a local SQLite fact store at `~/.tessera/semantic.db` (override with the
 `TESSERA_SEMANTIC_DB` env var).
 
-```tsr:memory:semantic
+```tsr:memory:semantic persistent=true
 knowledge {
   schema FactSheet(title: String, domain: String)
 }

@@ -89,7 +89,7 @@ def _parse_attrs(raw: str | None) -> dict[str, str]:
     return attrs
 
 
-def parse_source(source: str, path: str = "<string>") -> ParsedModule:
+def parse_source(source: str, path: str = "<string>", migrate: bool = True) -> ParsedModule:
     frontmatter: dict[str, Any] = {}
     rest = source
     m = _FRONTMATTER.match(source)
@@ -116,7 +116,11 @@ def parse_source(source: str, path: str = "<string>") -> ParsedModule:
 
     prose = _FENCE.sub("", rest).strip()
 
-    return ParsedModule(path=path, frontmatter=frontmatter, blocks=blocks, prose=prose)
+    mod = ParsedModule(path=path, frontmatter=frontmatter, blocks=blocks, prose=prose)
+    if migrate:
+        from ..migrations import apply_migrations
+        mod = apply_migrations(mod)
+    return mod
 
 
 def parse_file(path: str | Path) -> ParsedModule:

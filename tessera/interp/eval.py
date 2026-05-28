@@ -187,6 +187,9 @@ class World:
     # active plan + intent. Exported via `tessera compile --run X --audit out`.
     audit: list[AuditEvent] = field(default_factory=list)
     _audit_seq: int = 0
+    # Per-run shadow for non-persistent semantic schemas (those declared with
+    # `persistent=false` on the memory:semantic fence). Keyed by schema name.
+    ephemeral_semantic: dict[str, list[dict]] = field(default_factory=dict)
 
     def record(self, agent_name: str | None, action: str, **detail) -> None:
         st = self.agents.get(agent_name) if agent_name else None
@@ -537,14 +540,24 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         field_names = n.attributes.get("fields") or []
         arg_vals = [values[i] for i in n.inputs]
         record = {"schema": schema, "fields": dict(zip(field_names, arg_vals))}
-        from ..adapters.semantic import remember_fact
-        remember_fact(schema, record["fields"])
+        schema_decl = world.module.knowledge_schemas.get(schema)
+        if schema_decl and not schema_decl.persistent:
+            world.ephemeral_semantic.setdefault(schema, []).append(record)
+        else:
+            from ..adapters.semantic import remember_fact
+            remember_fact(schema, record["fields"])
         return record
 
     if op is Op.SM_Search:
         schema = n.attributes.get("schema", "")
         where_field = n.attributes.get("where_field")
         where_value = values[n.inputs[0]] if (where_field and n.inputs) else None
+        schema_decl = world.module.knowledge_schemas.get(schema)
+        if schema_decl and not schema_decl.persistent:
+            return [
+                r for r in world.ephemeral_semantic.get(schema, [])
+                if where_field is None or r["fields"].get(where_field) == where_value
+            ]
         from ..adapters.semantic import lookup_facts
         return lookup_facts(schema, where_field=where_field,
                             where_value=where_value)

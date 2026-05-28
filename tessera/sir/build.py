@@ -1178,10 +1178,13 @@ def _lower_knowledge(block: SubstrateBlock, mod: Module) -> None:
         raise SyntaxFail("expected `knowledge { schema Name(fields) }`")
     brace = src.index("{", m.end() - 1)
     body, _ = _balanced_extract(src, brace)
+    persistent = block.attrs.get("persistent", "true").lower() != "false"
     for sm in _SCHEMA_DECL_RE.finditer(body):
         name, params_src = sm.groups()
         mod.knowledge_schemas[name] = KnowledgeSchemaDecl(
-            name=name, fields=_parse_typed_params(params_src),
+            name=name,
+            fields=_parse_typed_params(params_src),
+            persistent=persistent,
         )
 
 
