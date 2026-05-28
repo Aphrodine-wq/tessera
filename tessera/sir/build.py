@@ -42,7 +42,7 @@ from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
     ASTDecl, BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
-    CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl,
+    CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl, WelfareDecl,
     TraitDecl, WorkspaceDecl,
 )
 
@@ -1216,6 +1216,36 @@ def _lower_autonomy(block: SubstrateBlock, mod: Module) -> None:
     )
 
 
+_WELFARE_HEAD_RE = re.compile(r"welfare\s*\{")
+_WELFARE_THRESH_RE = re.compile(r"threshold\s+(\w+)\s*:\s*([0-9.]+)")
+_WELFARE_CONSEC_RE = re.compile(r"consecutive_required\s*:\s*(\d+)")
+
+
+def _lower_welfare(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _WELFARE_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `welfare { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = WelfareDecl()
+    for tm in _WELFARE_THRESH_RE.finditer(body):
+        decl.thresholds[tm.group(1)] = float(tm.group(2))
+    cm = _WELFARE_CONSEC_RE.search(body)
+    if cm:
+        decl.consecutive_required = int(cm.group(1))
+        if decl.consecutive_required < 1:
+            raise SyntaxFail(
+                f"welfare: consecutive_required must be >= 1 (got {decl.consecutive_required})"
+            )
+    # Compile-time check: refuse forbidden consciousness claims in body.
+    from ..iit import claim_violates_consciousness_discipline
+    reason = claim_violates_consciousness_discipline(body)
+    if reason:
+        raise SyntaxFail(f"welfare block: {reason}")
+    mod.welfare = decl
+
+
 _IIT_HEAD_RE = re.compile(r"iit\s*\{")
 _IIT_EMIT_RE = re.compile(r"emit_phi_audit\s*:\s*(true|false)")
 _IIT_SUBJECT_RE = re.compile(r"agent_subject\s*:\s*(\w+)")
@@ -1557,6 +1587,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_tom(block, mod)
         elif block.substrate == "iit":
             _lower_iit(block, mod)
+        elif block.substrate == "welfare":
+            _lower_welfare(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

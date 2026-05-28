@@ -374,6 +374,27 @@ class AutonomyDecl:
 
 
 @dataclass
+class WelfareDecl:
+    """Welfare substrate config (research C4).
+
+    Reference: Birch (2020). The search for invertebrate consciousness.
+    Noûs 54(1):133-155.
+
+    `thresholds` maps marker name to minimum acceptable value:
+      - "phi"           — minimum phi* (from tsr:iit)
+      - "bandwidth"     — minimum workspace ignition bandwidth
+      - "ast_fidelity"  — minimum AST self-report fidelity
+    `consecutive_required` is the number of consecutive cycles a marker
+    must remain below threshold before refusal triggers.
+
+    PHILOSOPHY.md: this is a BEHAVIORAL commitment. It is NOT a claim
+    about phenomenal consciousness or moral status.
+    """
+    thresholds: dict[str, float] = field(default_factory=dict)
+    consecutive_required: int = 3
+
+
+@dataclass
 class IITDecl:
     """IIT substrate config (research C1).
 
@@ -533,6 +554,7 @@ class Module:
     ast: "ASTDecl | None" = None
     tom: "ToMDecl | None" = None
     iit: "IITDecl | None" = None
+    welfare: "WelfareDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:
