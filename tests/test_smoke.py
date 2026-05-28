@@ -428,6 +428,44 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_audit_tiering_governance_vs_operational():
+    """ethics_applied events land in governance; plain prompt calls in operational."""
+    import sqlite3
+    import os
+    gov = os.environ["TESSERA_AUDIT_GOV_DB"]
+    ops = os.environ["TESSERA_AUDIT_OPS_DB"]
+    MIGRATION = Path(__file__).parent.parent / "examples" / "migration_advisor.t.md"
+    pm = parse_file(MIGRATION)
+    module = lower(pm)
+    run_agent(module, "MigrationAdvisor",
+              initial_beliefs={"proposal": "rename a column"})
+    # Governance DB has rows (ethics_applied was non-empty on the prompt call).
+    with sqlite3.connect(gov) as c:
+        gov_count = c.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert gov_count > 0, "expected governance events (ethics_applied)"
+    # Operational DB might be empty for this agent — that's fine.
+    # The point is governance got SOMETHING.
+
+
+def test_audit_purge_respects_governance():
+    """purge_operational drops operational rows but never touches governance."""
+    from tessera.adapters.audit import record_event, purge_operational
+    import sqlite3
+    import os
+    record_event({"seq": 1, "agent": "X", "plan": "p", "intent": "i",
+                  "action": "plan_enter:p", "intent_served": "i"})  # → governance
+    record_event({"seq": 2, "agent": "X", "plan": "p", "intent": None,
+                  "action": "prompt:foo", "cost": 0.0})  # → operational
+    from datetime import datetime, timezone, timedelta
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    n = purge_operational(before=future)
+    assert n >= 1, "expected to purge at least the operational event"
+    gov = os.environ["TESSERA_AUDIT_GOV_DB"]
+    with sqlite3.connect(gov) as c:
+        gov_count = c.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert gov_count >= 1, "governance must not be purged"
+
+
 def test_audit_persists_and_queries():
     """Running an agent populates the audit store; query_events returns rows."""
     from tessera.adapters.audit import query_events

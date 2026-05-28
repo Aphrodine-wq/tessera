@@ -192,11 +192,22 @@ def _cmd_audit_query(args: argparse.Namespace) -> int:
         since=args.since,
         until=args.until,
         limit=args.limit,
+        tier=args.tier,
     )
     for r in rows:
         print(json.dumps(r))
     if args.count:
         print(f"# {len(rows)} event(s)", file=sys.stderr)
+    return 0
+
+
+def _cmd_audit_purge(args: argparse.Namespace) -> int:
+    from .adapters.audit import purge_operational
+    n = purge_operational(
+        before=args.before,
+        retention_days=args.days,
+    )
+    print(f"purged {n} operational event(s); governance untouched")
     return 0
 
 
@@ -270,9 +281,17 @@ def main(argv: list[str] | None = None) -> int:
     audq.add_argument("--since", help="ISO timestamp (>=)")
     audq.add_argument("--until", help="ISO timestamp (<=)")
     audq.add_argument("--limit", type=int, default=100)
+    audq.add_argument("--tier", choices=["governance", "operational"],
+                      help="Restrict to one tier (default: both)")
     audq.add_argument("--count", action="store_true",
                       help="Print row count to stderr after results")
     audq.set_defaults(fn=_cmd_audit_query)
+
+    audp = audsub.add_parser("purge", help="Drop operational events older than a cutoff")
+    audp.add_argument("--before", help="ISO timestamp (default: now - retention_days)")
+    audp.add_argument("--days", type=int,
+                      help="Override TESSERA_AUDIT_RETENTION_DAYS (default 30)")
+    audp.set_defaults(fn=_cmd_audit_purge)
 
     # version
     verp = sub.add_parser("version")
