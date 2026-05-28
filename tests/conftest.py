@@ -14,6 +14,9 @@ def isolate_tessera_stores(tmp_path, monkeypatch):
     # so tests can verify the routing without polluting the dev's stores.
     monkeypatch.setenv("TESSERA_AUDIT_GOV_DB", str(tmp_path / "audit_gov.db"))
     monkeypatch.setenv("TESSERA_AUDIT_OPS_DB", str(tmp_path / "audit_ops.db"))
+    # Checkpoints + corpora isolated per test as well.
+    monkeypatch.setenv("TESSERA_CHECKPOINTS_DIR", str(tmp_path / "checkpoints"))
+    monkeypatch.setenv("TESSERA_CORPORA_DIR", str(tmp_path / "corpora"))
     # Force the deterministic backend in tests so prompts don't hit the
     # network and so output is reproducible across machines.
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")

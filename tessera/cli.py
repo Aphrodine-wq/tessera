@@ -240,6 +240,13 @@ def _cmd_audit_purge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_audit_assemble_corpus(args: argparse.Namespace) -> int:
+    from .training_corpus import assemble_for_skill
+    path, n = assemble_for_skill(args.skill)
+    print(f"wrote {n} pair(s) → {path}")
+    return 0
+
+
 def _cmd_version(_args: argparse.Namespace) -> int:
     print(f"tessera {__version__}")
     return 0
@@ -325,6 +332,11 @@ def main(argv: list[str] | None = None) -> int:
     audp.add_argument("--days", type=int,
                       help="Override TESSERA_AUDIT_RETENTION_DAYS (default 30)")
     audp.set_defaults(fn=_cmd_audit_purge)
+
+    audc = audsub.add_parser("assemble-corpus",
+                             help="Build a training-corpus JSONL for a procedural skill")
+    audc.add_argument("skill")
+    audc.set_defaults(fn=_cmd_audit_assemble_corpus)
 
     # evolve
     ev = sub.add_parser("evolve", help="Run the tsr:evolve block in a file")

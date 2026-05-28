@@ -428,6 +428,19 @@ def test_migration_advisor_fires_built_in_traits():
     assert ethics == {"no_silent_data_loss", "homeowner_trust"}
 
 
+def test_training_corpus_assembler_writes_pairs():
+    """Running the summarizer_with_promotion example produces audit events,
+    and assemble_for_skill turns them into a JSONL corpus."""
+    from tessera.training_corpus import assemble_for_skill, corpus_path
+    SUMM = Path(__file__).parent.parent / "examples" / "summarizer_with_promotion.t.md"
+    pm = parse_file(SUMM)
+    module = lower(pm)
+    run_agent(module, "Summarizer", initial_beliefs={"article": "hello"})
+    path, n = assemble_for_skill("summarize")
+    assert path.exists()
+    assert n > 0, "expected at least one skill/prompt pair in corpus"
+
+
 def test_governance_e1000_when_policy_is_unsatisfiable():
     """A policy whose constraint refuses every sampled action emits E1000
     (decision 18 MVP via sampling)."""
