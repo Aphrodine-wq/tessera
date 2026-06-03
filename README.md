@@ -78,7 +78,7 @@ enforces boundaries between them (substrate adjacency, effect propagation,
 capability gating).
 
 ```bash
-tessera substrates    # prints English breakdown of all 16 categories
+tessera substrates    # prints English breakdown of every substrate category
 ```
 
 | Substrate | What it is | Example |
@@ -92,10 +92,25 @@ tessera substrates    # prints English breakdown of all 16 categories
 | `prompt` | LLM template + bindings | `prompt summarize(t) -> String = "..."` |
 | `tool` | external callable (python or LangChain) | `tool web_search(q) from langchain_community.tools.DuckDuckGoSearchRun` |
 | `neural` | torch nn.Module declared inline | `model classifier { linear in=4 out=8; relu; ... }` |
+| `rl` | ε-greedy choice + Q-learning that persists across runs | `rl { agent: Router actions: [fast, careful] state_from: [topic] }` |
 
-Eight more are planned (`policy`, `eval`, `evolve`, `identity`, `predict`,
-`phenomenology`, `memory:procedural`). Run `tessera substrates` to see the
-full menu.
+A few more are planned (`identity`, `predict`, `phenomenology`). Run
+`tessera substrates` to see the full menu.
+
+### Runtime intelligence (v0.1.0)
+
+Agents get smarter and faster without any extra wiring:
+
+- **Auto-recall** — an agent with a `memory:semantic` / `memory:episodic` block
+  has its relevant facts + recent events injected into every prompt
+  automatically (ranked by keyword overlap). No manual `lookup` needed.
+  Opt-out with `TESSERA_NO_AUTO_RECALL=1`.
+- **Auto-confidence routing** — `bayesian_posterior` / `abductive` set the
+  agent's `_confidence`, so `tsr:dual_process` routes low-confidence plans to
+  the slow path on its own; slow-path prompts deliberate and skip the cache.
+- **Faster prompts** — the semantic prompt cache has an exact-hash fast path
+  and loads once per process instead of re-scanning the JSONL every call
+  (≈280× faster warm lookups; see `tests/test_bench.py`).
 
 ---
 

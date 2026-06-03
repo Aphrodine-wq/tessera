@@ -71,6 +71,11 @@ class OllamaBackend(LLMBackend):
         for k in ("temperature", "top_p", "num_predict"):
             if k in opts:
                 body.setdefault("options", {})[k] = opts[k]
+        # Tier-B constraint: Ollama takes a JSON Schema object in `format`
+        # (top-level, not under options). The wire adapter passes the schema's
+        # JSON projection; the model emits JSON we transcode to the wire form.
+        if "format" in opts:
+            body["format"] = opts["format"]
 
         req = urllib.request.Request(
             f"{self.host}/api/generate",

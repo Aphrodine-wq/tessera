@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-06-03 — v0.1.0: Smarter + faster across the .t.md
+
+A hot-path overhaul of `_call_prompt` (the spine every agent run flows through)
+on two axes, plus the first reinforcement-learning substrate. Version 0.0.1 →
+**0.1.0**; tests 285 → **316 green**.
+
+### Faster
+
+- **Indexed, in-memory caches.** `semantic_cache_lookup` re-read the JSONL and
+  recomputed cosine against every row on every prompt call; `verify_cache_get`
+  linear-scanned its file each compile. Both now load once per file version
+  into a single-slot structure keyed by (path, mtime). The prompt cache gains
+  an exact-hash fast path — an identical rendered prompt returns O(1) with no
+  embedding (≈280× faster warm lookups, `tests/test_bench.py`). Also fixed a
+  latent bug: the cache dir was frozen at import, so the test suite wrote to
+  the dev's real `~/.cache/tessera`; it now resolves dynamically and is
+  isolated per test.
+- **Trait hot path.** `TriggerContext._haystack` is memoized per context — a
+  single `fire_traits()` no longer re-normalizes the prompt ~14× (once per
+  built-in trigger).
+
+### Smarter
+
+- **Auto-recall (RAG).** Agents with a `memory:semantic` / `memory:episodic`
+  block get relevant facts (ranked by keyword overlap, from the persistent
+  store and the in-World shadow) + recent episodic events injected into every
+  prompt automatically. Opt-out `TESSERA_NO_AUTO_RECALL=1`; counts stamped as
+  `recalled` on each prompt audit event.
+- **Auto-confidence routing.** `bayesian_posterior` / `abductive` write their
+  max posterior to `_confidence`, which `tsr:dual_process` reads at the next
+  plan entry — so reasoning steers fast/slow routing on its own. Slow-routed
+  prompts inject a deliberation frame and bypass the cache; `routed=fast|slow`
+  audited.
+- **`tsr:rl` substrate.** The orphaned `rl.py` is now first-class: parser/SIR
+  (`RLDecl`), checker (`pass_16_rl`: E930 unknown agent, E931 needs ≥2
+  actions), and two opt-in builtins — `rl_choose()` returns an ε-greedy action
+  label keyed on the `state_from` beliefs; `rl_reward(action, reward)` updates
+  the tabular Q-table, persisted per agent under `~/.tessera/rl/`. Actions are
+  labels (not plans) so choice never dispatches or intercepts control flow.
+  Catalog **29 → 30 shipped**; `examples/rl_router.t.md`.
+
 ## 2026-06-03 — Wire the orphan substrates: 13 cognitive substrates made real
 
 The research wave (commits tagged `research 4.x / A / B / C / D`) had built 16
