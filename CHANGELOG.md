@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-06-03 — Wire the orphan substrates: 13 cognitive substrates made real
+
+The research wave (commits tagged `research 4.x / A / B / C / D`) had built 16
+cognitive-science modules as tested standalone Python, but they were never
+wired into the language pipeline — declaring them did nothing at runtime, and
+the `tessera substrates` catalog, CITATIONS, and this changelog all disagreed
+about what shipped. This batch closes that gap. The catalog goes from **16 → 29
+shipped substrates**; tests from 242 → **277 green**.
+
+### Phase 1 — partial substrates made real at runtime (commit `0cb95a7`, `dd41f83`)
+
+Seven substrates already parsed + lowered but the interpreter ignored them. New
+`interp/substrates.py` is the one place their runtime lives:
+
+- **iit** — compute φ* over the belief/intention dependency graph at plan entry,
+  emit `iit:phi`. (Fixed a latent `Op.BeliefWrite` bug — real op is `BeliefRevise`.)
+- **welfare** — record markers (φ* from iit, bandwidth from `gwt:ignition`,
+  ast_fidelity) and refuse after N consecutive sub-threshold cycles.
+- **ast** — score introspection fidelity (the `_focus` belief vs the running plan);
+  refuse below `min_fidelity`.
+- **tom** — manipulation-refusal gate on prompt output (Sally-Anne false-belief
+  check grounded in `tom_false` markers).
+- **causal / bayesian / metacognition** — declaration blocks whose runtime is the
+  Phase-4 callable/calibration path.
+
+### Phase 2 — gate substrates (commit `c379e9e`)
+
+**precaution**, **moral_foundations**, **dual_process** — all driven by the proven
+`tsr:autonomy` term-matching mechanism. precaution + moral_foundations gate
+before the model call; dual_process routes fast/slow at plan entry. Verify lints
+E800 / E810 / E820.
+
+### Phase 3 — post-hook substrates (commit `232f61b`)
+
+**gricean** (maxim scoring), **argumentative** (critic-pass confidence downweight),
+**hindsight** (after-action review feeding tsr:evolve fitness) — via a shared
+`on_prompt_output` + `on_plan_exit` seam. Verify lints E900 / E910 / E920.
+
+### Phase 4 — value-layer literals + reasoning-tool callables (commit `dd41f83`)
+
+Added list `[..]` and record `{..}` literals to the expression grammar — the
+first value-layer extension since v0.2. On top of them, five reasoning tools
+become callable from a plan (no new block): `causal_backdoor`,
+`causal_identifiable`, `counterfactual` (over a declared tsr:causal DAG),
+`bayesian_posterior` (exact discrete inference, metacognition-calibrated),
+`calibrate`, `abductive`, `analogy`.
+
+### Error-code bands added
+
+E200–E250 reserved for partial-substrate validation; E800 precaution, E810
+dual_process, E820 moral_foundations, E900 gricean, E910 hindsight, E920
+argumentative (E920 errors when the critic prompt is undefined).
+
+### Still planned (genuinely not built)
+
+`evolve`, `identity`, `predict`, `phenomenology` remain `planned`. `rl_loop`,
+`active_inference`, `concept_formation`, `semantic_embedding` remain research
+notes in CITATIONS, not substrates.
+
 ## 2026-05-28 — Synapse → local SQLite + v0.2 + governance/audit batch
 
 Twelve commits across one architecture session + two execution batches.

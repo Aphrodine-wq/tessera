@@ -135,7 +135,7 @@ entry links here.
 
 ## Reasoning / inference
 
-### `tsr:dual_process` (research 4.1) — SHIPPED (engine; substrate decl pending)
+### `tsr:dual_process` (research 4.1) — SHIPPED (substrate)
 
 - **References:**
   - Kahneman, D. (2011). *Thinking, Fast and Slow.* Farrar, Straus and Giroux.
@@ -143,7 +143,7 @@ entry links here.
 - **Operationalized claim:** A router can pick fast (cached / pattern-match) vs slow (deliberative) based on confidence + budget + irreversibility, with the chosen mode audit-emitted per action.
 - **What we do NOT claim:** That cognition is genuinely discrete-dual. Evans & Stanovich (2013) acknowledge the abstraction's edges.
 
-### `tsr:counterfactual` (research 4.2) — SHIPPED (engine; substrate decl pending)
+### `counterfactual(...)` (research 4.2) — SHIPPED (callable over tsr:causal)
 
 - **References:**
   - Lewis, D. (1973). *Counterfactuals.* Harvard University Press.
@@ -152,7 +152,7 @@ entry links here.
 - **Operationalized claim:** Deterministic structural counterfactuals via Pearl's ABDUCTION → ACTION → PREDICTION recipe over a declared causal DAG; inconsistent observations return (None, None) signalling non-identifiability.
 - **What we do NOT claim:** Stochastic counterfactual identifiability. MVP is deterministic structural equations.
 
-### `tsr:abductive` (research 4.3) — SHIPPED (engine; substrate decl pending)
+### `abductive(...)` (research 4.3) — SHIPPED (callable)
 
 - **References:**
   - Peirce, C. S. (1903). *Pragmatism as a Principle and Method of Right Thinking.* Harvard lectures.
@@ -161,9 +161,55 @@ entry links here.
 - **Operationalized claim:** Ranked hypotheses by posterior = prior × likelihood × parsimony; below-threshold winner returns None (anti-overconfidence).
 - **What we do NOT claim:** That "best" captures Lipton's LOVELINESS dimension. We rank by likeliness only; loveliness is a follow-up.
 
+### `analogy(...)` (research 4.4) — SHIPPED (callable)
 
+- **References:**
+  - Gentner, D. (1983). *Structure-mapping: a theoretical framework for analogy.* Cognitive Science, 7(2), 155–170.
+  - Falkenhainer, B., Forbus, K. D., Gentner, D. (1989). *The structure-mapping engine.* Artificial Intelligence, 41(1), 1–63.
+- **Operationalized claim:** A greedy structure-mapping search finds an object binding source→target maximizing relational overlap, with a systematicity bonus for higher-arity relations.
+- **What we do NOT claim:** Surface/semantic similarity. The engine is symbolic over author-declared relations; it cannot infer relations from prose.
 
-### `tsr:causal` (research D1)
+### `tsr:gricean` (research 4.5) — SHIPPED (substrate)
+
+- **References:**
+  - Grice, H. P. (1975). *Logic and conversation.* In Cole & Morgan (eds.), Syntax and Semantics 3: Speech Acts. Academic Press, 41–58.
+- **Operationalized claim:** An outgoing message can be scored against the four maxims (quantity / quality / relation / manner) with length, evidence, topic, and repetition heuristics; gated maxims refuse on violation.
+- **What we do NOT claim:** That the maxims are indefeasible. They are pluggable per agent — irony / indirection / deniability are real exceptions the heuristics don't model.
+
+### `tsr:precaution` (research 4.7) — SHIPPED (substrate)
+
+- **References:**
+  - Hansson, S. O. (2003). *Ethical criteria of risk acceptance.* Erkenntnis, 59(3), 291–309.
+  - Taleb, N. N. (2012). *Antifragile.* Random House. (Informal antifragility framing.)
+- **Operationalized claim:** Under non-trivial tail probability of crossing a harm threshold — especially when irreversible — refuse the action even when expected value is positive; the burden of proof shifts onto the action.
+- **What we do NOT claim:** That thresholds are objective. They are author-declared per domain; over-precaution paralyzes, under-precaution defeats the purpose.
+
+### `tsr:moral_foundations` (research 4.9) — SHIPPED (substrate)
+
+- **References:**
+  - Haidt, J. (2012). *The Righteous Mind.* Pantheon.
+  - Graham, J., Haidt, J., et al. (2013). *Moral Foundations Theory.* Advances in Experimental Social Psychology, 47, 55–130.
+- **Operationalized claim:** Six weighted moral axes; an action scoring negative on a weighted axis (> 0.1) is refused — value pluralism rather than one-axis utility.
+- **What we do NOT claim:** That MFT is the true structure of moral cognition. It is contested; the substrate treats it as a useful representation, with author-editable foundations.
+
+### `tsr:hindsight` (research 4.10) — SHIPPED (substrate)
+
+- **References:**
+  - US Army Combined Arms Center (1993). *A Leader's Guide to After-Action Reviews.* TC 25-20.
+  - Argyris, C., Schön, D. (1978). *Organizational Learning.* Addison-Wesley.
+  - Fischhoff, B. (1975). *Hindsight ≠ foresight.* JEP: Human Perception and Performance, 1(3), 288–299.
+- **Operationalized claim:** On plan completion, compare declared vs applied ethics + intended vs actual outcome; discrepancies become a learning signal feeding tsr:evolve fitness.
+- **What we do NOT claim:** That retrospective judgment is unbiased — the review shows prior and posterior separately (Fischhoff) rather than collapsing them.
+
+### `tsr:argumentative` (research 4.12) — SHIPPED (substrate)
+
+- **References:**
+  - Mercier, H., Sperber, D. (2011). *Why do humans reason?* Behavioral and Brain Sciences, 34(2), 57–74.
+  - Mercier, H., Sperber, D. (2017). *The Enigma of Reason.* Harvard University Press.
+- **Operationalized claim:** A critic pass argues against the proposed answer; the counter-argument's strength log-odds-downweights the proposer's confidence, and a below-threshold answer is refused.
+- **What we do NOT claim:** That the critic is a complete adversary. The strength heuristic scores declared refutation markers; an LLM critic is the stronger follow-up.
+
+### `tsr:causal` (research D1) — SHIPPED (substrate + callables)
 
 - **References:**
   - Pearl, J. (2009). *Causality: Models, Reasoning, and Inference*

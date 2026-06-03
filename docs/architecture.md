@@ -278,10 +278,13 @@ a workshop for cognition.
 
 | Substrate | Status |
 |---|---|
-| `logic`, `agent`, `memory:working`, `memory:workspace`, `memory:episodic`, `memory:semantic`, `prompt`, `tool`, `neural` | shipped |
-| `policy`, `eval` | next (this turn) |
-| `memory:procedural`, `identity`, `evolve` | planned |
-| `predict`, `phenomenology` | planned — heavy ethics; see PRD §12 first |
+| `logic`, `agent`, `memory:*`, `prompt`, `tool`, `neural`, `policy`, `eval` | shipped |
+| `traits`, `intent`, `ethics`, `autonomy` | shipped (governance) |
+| `iit`, `welfare`, `ast`, `tom` | shipped (consciousness-adjacent; PHILOSOPHY.md) |
+| `precaution`, `moral_foundations`, `dual_process` | shipped (gates) |
+| `gricean`, `hindsight`, `argumentative` | shipped (post-hooks) |
+| `causal`, `bayesian`, `metacognition` | shipped (+ reasoning callables: counterfactual, abductive, analogy, …) |
+| `identity`, `evolve`, `predict`, `phenomenology` | planned — `predict`/`phenomenology` heavy ethics; see PRD §12 first |
 
 | System integration | Status |
 |---|---|

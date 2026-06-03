@@ -173,10 +173,16 @@ shadow that lives only for the run.
 
 ## Status
 
-- **Tests:** 81 passing
-- **Shipped substrates:** logic, agent, memory:working, memory:workspace,
+- **Tests:** 277 passing
+- **Shipped substrates (29):** logic, agent, memory:working, memory:workspace,
   memory:episodic, memory:semantic, memory:procedural, prompt, tool, neural,
-  traits, intent, ethics, autonomy, policy, eval
+  traits, intent, ethics, autonomy, policy, eval, iit, welfare, ast, tom,
+  precaution, moral_foundations, dual_process, gricean, hindsight,
+  argumentative, causal, bayesian, metacognition. Run `tessera substrates`.
+- **Reasoning-tool callables (from a plan, no new block):** `causal_backdoor`,
+  `causal_identifiable`, `counterfactual` (over a declared `tsr:causal` DAG),
+  `bayesian_posterior` (exact discrete inference), `calibrate`, `abductive`,
+  `analogy` — enabled by list `[..]` and record `{..}` value-layer literals.
 - **Built-in cognitive traits (10):** doubt_first, cross_brain, compulsive,
   hypervigilant, synesthetic, manic_burst, imposter_recursion,
   spectrum_directness, anxiety_simulation, insomniac_focus.
