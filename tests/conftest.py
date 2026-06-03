@@ -17,6 +17,9 @@ def isolate_tessera_stores(tmp_path, monkeypatch):
     # Checkpoints + corpora isolated per test as well.
     monkeypatch.setenv("TESSERA_CHECKPOINTS_DIR", str(tmp_path / "checkpoints"))
     monkeypatch.setenv("TESSERA_CORPORA_DIR", str(tmp_path / "corpora"))
+    # Parse/verify/semantic caches → per-test dir so a run never reads from or
+    # writes to the dev's real ~/.cache/tessera.
+    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path / "cache"))
     # Force the deterministic backend in tests so prompts don't hit the
     # network and so output is reproducible across machines.
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")

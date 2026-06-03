@@ -1169,9 +1169,7 @@ def test_parse_cache_invalidates_on_file_change(tmp_path):
 def test_verify_cache_round_trip(tmp_path, monkeypatch):
     """verify_cache_put followed by verify_cache_get returns same diagnostics."""
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
-    # Force the cache module to re-read env
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     cmod.clear_verify_cache()
     cmod.verify_cache_put("FAKE SIR TEXT", [{"code": "E000", "severity": "error",
                                               "region": "x", "node": "y", "message": "z"}])
@@ -1212,7 +1210,6 @@ def test_openai_compatible_backend_init_with_no_sdk():
 def test_semantic_cache_put_get_round_trip(tmp_path, monkeypatch):
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     cmod.clear_semantic_cache()
     cmod.semantic_cache_put("what is retainage", "Retainage is...", "anthropic", "claude")
     hit = cmod.semantic_cache_lookup("what is retainage")
@@ -1464,7 +1461,6 @@ def test_traits_end_to_end_noop_injects_behavior(monkeypatch, tmp_path):
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
 
@@ -1508,7 +1504,6 @@ def test_trait_per_plan_fires_from_plan_static_context(monkeypatch, tmp_path):
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
     from tessera.parser.module import parse_source
@@ -1551,7 +1546,6 @@ def test_trait_global_scope_injects_across_non_matching_calls(monkeypatch, tmp_p
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
     from tessera.parser.module import parse_source
@@ -1692,7 +1686,6 @@ def test_audit_trace_stamps_actions_with_intent(monkeypatch, tmp_path):
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
     from tessera.interp.eval import World
@@ -1713,7 +1706,6 @@ def test_audit_records_policy_refusal(monkeypatch, tmp_path):
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
     from tessera.interp.eval import World
@@ -1754,7 +1746,6 @@ def test_ethics_injected_into_prompt(monkeypatch, tmp_path):
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
     from tessera.interp.eval import World
@@ -1773,7 +1764,6 @@ def test_autonomy_propose_blocks_gated_action(monkeypatch, tmp_path):
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
     from tessera.parser.module import parse_source
@@ -1812,7 +1802,6 @@ def test_autonomy_act_freely_allows_gated_action(monkeypatch, tmp_path):
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
     monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
     from tessera import cache as cmod
-    monkeypatch.setattr(cmod, "_CACHE_DIR", tmp_path)
     from tessera.adapters.llm import reset_cache
     reset_cache()
     from tessera.parser.module import parse_source

@@ -27,16 +27,25 @@ from functools import lru_cache
 from pathlib import Path
 
 
-_CACHE_DIR = Path(os.environ.get("TESSERA_CACHE_DIR")
-                  or (Path.home() / ".cache" / "tessera"))
+def _cache_dir() -> Path:
+    """Resolve the cache dir on every call so a mid-process env change (tests
+    isolating ``TESSERA_CACHE_DIR`` per case) takes effect."""
+    return Path(os.environ.get("TESSERA_CACHE_DIR")
+                or (Path.home() / ".cache" / "tessera"))
 
 
 def _ensure_cache_dir() -> Path:
+    d = _cache_dir()
     try:
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        d.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        warnings.warn(f"could not create cache dir {_CACHE_DIR}: {e}")
-    return _CACHE_DIR
+        warnings.warn(f"could not create cache dir {d}: {e}")
+    return d
+
+
+def _text_hash(text: str) -> str:
+    """blake2b-16 hex of a UTF-8 string — used for exact cache keys."""
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 
 # ---------- parse cache ----------
@@ -89,17 +98,25 @@ def _verify_cache_path() -> Path:
 
 
 def _sir_hash(sir_text: str) -> str:
-    h = hashlib.blake2b(sir_text.encode("utf-8"), digest_size=16)
-    return h.hexdigest()
+    return _text_hash(sir_text)
 
 
-def verify_cache_get(sir_text: str) -> list | None:
-    if verify_cache_disabled():
-        return None
-    key = _sir_hash(sir_text)
-    p = _verify_cache_path()
-    if not p.exists():
-        return None
+# In-memory verify index, single-slot, keyed by (path, mtime). Avoids the
+# per-compile O(n) linear scan of verify.jsonl — a warm compile is a dict hit.
+_VERIFY_MEM: dict | None = None
+
+
+def _load_verify_mem(p: Path) -> dict:
+    global _VERIFY_MEM  # noqa: PLW0603
+    try:
+        mtime = p.stat().st_mtime_ns
+    except OSError:
+        _VERIFY_MEM = {"path": str(p), "mtime": -1, "index": {}}
+        return _VERIFY_MEM
+    if (_VERIFY_MEM is not None and _VERIFY_MEM["path"] == str(p)
+            and _VERIFY_MEM["mtime"] == mtime):
+        return _VERIFY_MEM
+    index: dict[str, list] = {}
     try:
         with p.open() as f:
             for line in f:
@@ -107,11 +124,22 @@ def verify_cache_get(sir_text: str) -> list | None:
                     row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if row.get("hash") == key:
-                    return row.get("diagnostics") or []
+                h = row.get("hash")
+                if h is not None:
+                    index[h] = row.get("diagnostics") or []
     except OSError as e:
         warnings.warn(f"verify cache read failed: {e}")
-    return None
+    _VERIFY_MEM = {"path": str(p), "mtime": mtime, "index": index}
+    return _VERIFY_MEM
+
+
+def verify_cache_get(sir_text: str) -> list | None:
+    if verify_cache_disabled():
+        return None
+    p = _verify_cache_path()
+    if not p.exists():
+        return None
+    return _load_verify_mem(p)["index"].get(_sir_hash(sir_text))
 
 
 def verify_cache_put(sir_text: str, diagnostics: list) -> None:
@@ -124,9 +152,19 @@ def verify_cache_put(sir_text: str, diagnostics: list) -> None:
             f.write(json.dumps({"hash": key, "diagnostics": diagnostics}) + "\n")
     except OSError as e:
         warnings.warn(f"verify cache write failed: {e}")
+        return
+    global _VERIFY_MEM  # noqa: PLW0603
+    if _VERIFY_MEM is not None and _VERIFY_MEM["path"] == str(p):
+        _VERIFY_MEM["index"][key] = diagnostics or []
+        try:
+            _VERIFY_MEM["mtime"] = p.stat().st_mtime_ns
+        except OSError:
+            pass
 
 
 def clear_verify_cache() -> None:
+    global _VERIFY_MEM  # noqa: PLW0603
+    _VERIFY_MEM = None
     p = _verify_cache_path()
     if p.exists():
         p.unlink()
@@ -176,22 +214,35 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
-def semantic_cache_lookup(prompt: str, *, threshold: float = 0.95) -> dict | None:
-    """Return a cached completion if a previously-seen prompt is semantically close.
+# In-memory prompt cache, single-slot, keyed by (path, mtime). Holds an exact
+# hash→row map (the common case: an identical rendered prompt re-run) and the
+# row list for the embedding-similarity fallback. Loaded once per file version
+# instead of re-reading + re-embedding the whole JSONL on every prompt call.
+_SEM_MEM: dict | None = None
 
-    threshold default 0.95 — tight enough to avoid hallucinated matches, loose
-    enough to catch paraphrases when a real embedding model is on path.
-    """
-    if semantic_cache_disabled():
-        return None
-    p = _semantic_cache_path()
-    if not p.exists():
-        return None
-    q_vec = _embed(prompt)
-    if q_vec is None:
-        return None
-    best = None
-    best_sim = 0.0
+
+def _row_result(row: dict, sim: float) -> dict:
+    return {
+        "text": row.get("text", ""),
+        "backend": row.get("backend", "cache"),
+        "model": row.get("model", "cache"),
+        "similarity": sim,
+        "cached_prompt": row.get("prompt", ""),
+    }
+
+
+def _load_sem_mem(p: Path) -> dict:
+    global _SEM_MEM  # noqa: PLW0603
+    try:
+        mtime = p.stat().st_mtime_ns
+    except OSError:
+        _SEM_MEM = {"path": str(p), "mtime": -1, "exact": {}, "rows": []}
+        return _SEM_MEM
+    if (_SEM_MEM is not None and _SEM_MEM["path"] == str(p)
+            and _SEM_MEM["mtime"] == mtime):
+        return _SEM_MEM
+    exact: dict[str, dict] = {}
+    rows: list[dict] = []
     try:
         with p.open() as f:
             for line in f:
@@ -199,20 +250,47 @@ def semantic_cache_lookup(prompt: str, *, threshold: float = 0.95) -> dict | Non
                     row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                sim = _cosine(q_vec, row.get("embedding") or [])
-                if sim > best_sim:
-                    best_sim = sim
-                    best = row
+                rows.append(row)
+                pr = row.get("prompt")
+                if pr is not None:
+                    exact[_text_hash(pr)] = row
     except OSError:
+        pass
+    _SEM_MEM = {"path": str(p), "mtime": mtime, "exact": exact, "rows": rows}
+    return _SEM_MEM
+
+
+def semantic_cache_lookup(prompt: str, *, threshold: float = 0.95) -> dict | None:
+    """Return a cached completion if a previously-seen prompt matches.
+
+    Exact-hash hit returns in O(1) with no embedding. On an exact miss we fall
+    back to embedding cosine similarity over the in-memory rows; threshold
+    default 0.95 — tight enough to avoid hallucinated matches, loose enough to
+    catch paraphrases when a real embedding model is on path.
+    """
+    if semantic_cache_disabled():
         return None
+    p = _semantic_cache_path()
+    if not p.exists():
+        return None
+    mem = _load_sem_mem(p)
+    # exact fast path — no embedding, no scan
+    row = mem["exact"].get(_text_hash(prompt))
+    if row is not None:
+        return _row_result(row, 1.0)
+    # similarity fallback over the in-memory rows
+    q_vec = _embed(prompt)
+    if q_vec is None:
+        return None
+    best = None
+    best_sim = 0.0
+    for row in mem["rows"]:
+        sim = _cosine(q_vec, row.get("embedding") or [])
+        if sim > best_sim:
+            best_sim = sim
+            best = row
     if best and best_sim >= threshold:
-        return {
-            "text": best.get("text", ""),
-            "backend": best.get("backend", "cache"),
-            "model": best.get("model", "cache"),
-            "similarity": best_sim,
-            "cached_prompt": best.get("prompt", ""),
-        }
+        return _row_result(best, best_sim)
     return None
 
 
@@ -222,20 +300,33 @@ def semantic_cache_put(prompt: str, text: str, backend: str = "", model: str = "
     embedding = _embed(prompt)
     if embedding is None:
         return
+    row = {
+        "prompt": prompt,
+        "text": text,
+        "backend": backend,
+        "model": model,
+        "embedding": embedding,
+    }
+    p = _semantic_cache_path()
     try:
-        with _semantic_cache_path().open("a") as f:
-            f.write(json.dumps({
-                "prompt": prompt,
-                "text": text,
-                "backend": backend,
-                "model": model,
-                "embedding": embedding,
-            }) + "\n")
+        with p.open("a") as f:
+            f.write(json.dumps(row) + "\n")
     except OSError as e:
         warnings.warn(f"semantic cache write failed: {e}")
+        return
+    global _SEM_MEM  # noqa: PLW0603
+    if _SEM_MEM is not None and _SEM_MEM["path"] == str(p):
+        _SEM_MEM["rows"].append(row)
+        _SEM_MEM["exact"][_text_hash(prompt)] = row
+        try:
+            _SEM_MEM["mtime"] = p.stat().st_mtime_ns
+        except OSError:
+            pass
 
 
 def clear_semantic_cache() -> None:
+    global _SEM_MEM  # noqa: PLW0603
+    _SEM_MEM = None
     p = _semantic_cache_path()
     if p.exists():
         p.unlink()
