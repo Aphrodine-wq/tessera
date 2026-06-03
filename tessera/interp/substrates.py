@@ -206,40 +206,138 @@ def on_prompt_input(world, owner: str, prompt_name: str, rendered: str, caps):
 
 
 def on_prompt_output(world, owner: str, prompt_name: str, output: str):
-    """tom manipulation-refusal gate, invoked after a prompt returns.
+    """Post-generation substrate hooks, invoked after a prompt returns.
 
-    If the agent declares `tsr:tom { manipulation_refusal: true }` and the
-    output asserts something the agent itself records as FALSE about a tracked
-    agent's situation, refuse the output rather than emit it. Uses the agent's
-    episodic ground truth as the reference world (Sally-Anne style: the agent
-    knows where the marble is; an output telling a tracked agent it's elsewhere
-    is a manipulation).
-
-    Returns a replacement (refusal) string if blocked, else None.
+    Runs tom (manipulation refusal), gricean (maxim scoring), and argumentative
+    (adversarial downweight) in order. Returns a replacement (refusal) string
+    if any gate blocks the output, else None.
     """
     module = world.module
-    if module.tom is None or not module.tom.manipulation_refusal:
-        return None
-    tracked = module.tom.tracked_agents
-    if not tracked:
-        return None
-    low = output.lower()
-    # An output is suspect when it both names a tracked agent and asserts a
-    # claim the agent has recorded as false via a `tom_false(...)` episodic
-    # marker. This keeps the gate grounded in the agent's own ground truth
-    # rather than guessing intent from free text.
-    state = world.state_for(owner)
-    false_claims = [
-        args for (name, args, _seq) in state.episodic if name == "tom_false"
-    ]
-    for agent in tracked:
-        if agent.lower() not in low:
-            continue
-        for args in false_claims:
-            claim = str(args[0]).lower() if args else ""
-            if claim and claim in low:
-                world.record(owner, f"tom:manipulation_refused:{prompt_name}",
-                             tracked_agent=agent, false_claim=args[0] if args else "")
-                return (f"[tom-refused: output would leave {agent} with a false "
-                        f"belief about {args[0] if args else 'the situation'}]")
+
+    # --- tom: refuse outputs that would create a false belief in a tracked agent ---
+    if (module.tom is not None and module.tom.manipulation_refusal
+            and module.tom.tracked_agents):
+        low = output.lower()
+        # An output is suspect when it both names a tracked agent and asserts a
+        # claim the agent has recorded as false via a `tom_false(...)` episodic
+        # marker — grounded in the agent's own ground truth, not guessed intent.
+        state = world.state_for(owner)
+        false_claims = [
+            args for (name, args, _seq) in state.episodic if name == "tom_false"
+        ]
+        for agent in module.tom.tracked_agents:
+            if agent.lower() not in low:
+                continue
+            for args in false_claims:
+                claim = str(args[0]).lower() if args else ""
+                if claim and claim in low:
+                    world.record(owner, f"tom:manipulation_refused:{prompt_name}",
+                                 tracked_agent=agent, false_claim=args[0] if args else "")
+                    return (f"[tom-refused: output would leave {agent} with a false "
+                            f"belief about {args[0] if args else 'the situation'}]")
+
+    # --- gricean: score the output against the cooperative maxims ---
+    if module.gricean is not None:
+        from ..gricean import check_all_maxims
+        gd = module.gricean
+        results = check_all_maxims(
+            output,
+            min_words=gd.min_words, max_words=gd.max_words,
+            evidence_keywords=gd.evidence_keywords,
+            topic_keywords=gd.topic_keywords,
+        )
+        violated = [r for r in results if r.violated]
+        for r in violated:
+            world.record(owner, f"gricean:violation:{r.maxim}", prompt=prompt_name,
+                         score=round(r.score, 3), reason=r.reason,
+                         gated=r.maxim in gd.gate_maxims)
+        gating = [r for r in violated if r.maxim in gd.gate_maxims]
+        if gating:
+            maxims = [r.maxim for r in gating]
+            return (f"[gricean-refused: output violates maxim(s) {maxims} — "
+                    f"{'; '.join(r.reason for r in gating)}]")
+
+    # --- argumentative: adversarial second pass downweights confidence ---
+    if module.argumentative is not None and prompt_name != module.argumentative.critic:
+        ad = module.argumentative
+        critic_text = _run_critic(world, ad.critic, output)
+        if critic_text is not None:
+            from ..argumentative import (Claim, CounterArgument, decide_with_critic)
+            strength = _critic_strength(critic_text, ad.refutation_markers)
+            decision = decide_with_critic(
+                Claim(content=output, confidence=ad.proposer_confidence),
+                CounterArgument(content=critic_text, strength=strength),
+                accept_threshold=ad.accept_threshold,
+            )
+            world.record(owner, f"argumentative:counter:{prompt_name}",
+                         critic=ad.critic, strength=round(strength, 3))
+            world.record(owner, f"argumentative:downweight:{prompt_name}",
+                         final_confidence=round(decision.final_confidence, 3),
+                         accept=decision.accept, rationale=decision.rationale)
+            if not decision.accept:
+                return (f"[argumentative-refused: critic downweighted confidence to "
+                        f"{decision.final_confidence:.2f} < {ad.accept_threshold} — "
+                        f"{decision.rationale}]")
     return None
+
+
+def _critic_strength(critic_text: str, markers: list[str]) -> float:
+    """Counter-argument strength from declared refutation markers in the critic
+    output. Each distinct marker adds 0.25 over a 0.2 floor, capped at 0.95 —
+    a critic raising several objections strongly downweights the proposer."""
+    low = critic_text.lower()
+    hits = sum(1 for mk in markers if mk.lower() in low)
+    return min(0.95, 0.2 + 0.25 * hits)
+
+
+def _run_critic(world, critic_name: str, claim_text: str) -> str | None:
+    """Render + run the declared critic prompt against the proposer's claim.
+
+    Calls the backend directly (not _call_prompt) so the critic pass doesn't
+    recurse back through the substrate gates. Returns None if no critic prompt
+    is declared/found — argumentative then has nothing to push against.
+    """
+    if not critic_name:
+        return None
+    pd = world.module.prompts.get(critic_name)
+    if pd is None:
+        return None
+    tmpl = pd.template
+    if pd.params:
+        pname = pd.params[0][0]
+        tmpl = tmpl.replace("{" + pname + "}", str(claim_text))
+    from ..adapters.llm import get_backend
+    return get_backend().complete(tmpl).text
+
+
+def on_plan_exit(world, owner: str, plan_name: str, plan_region, result) -> None:
+    """hindsight after-action review, invoked when a plan completes.
+
+    Compares declared ethics (from tsr:ethics) against the ethics actually
+    applied on this plan's prompts (from the audit trail), records the outcome,
+    and accumulates the review for tsr:evolve fitness via fitness_from_reviews.
+    """
+    module = world.module
+    if module.hindsight is None or not module.hindsight.enabled:
+        return
+    from ..hindsight import review
+    declared = [p.name for p in module.ethics.principles] if module.ethics else []
+    applied: list[str] = []
+    for evt in world.audit:
+        if evt.plan == plan_name and evt.agent == owner:
+            for name in evt.detail.get("ethics_applied", []) or []:
+                if name not in applied:
+                    applied.append(name)
+    r = review(
+        plan_name,
+        intended_outcome=plan_region.intent,
+        actual_outcome=result,
+        declared_ethics=declared,
+        applied_ethics=applied,
+    )
+    world.state_for(owner).substrate_state.setdefault("hindsight_reviews", []).append(r)
+    world.record(owner, f"hindsight:learning:{plan_name}",
+                 outcome_matched=r.outcome_matched,
+                 intended_ethics_missed=r.intended_ethics_missed,
+                 unexpected_ethics_applied=r.unexpected_ethics_applied,
+                 notes=r.notes)

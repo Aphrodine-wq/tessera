@@ -556,7 +556,10 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
             refusal = substrates.on_plan_enter(world, owner, plan_name)
             if refusal is not None:
                 return refusal
-            return eval_region(plan_region, world, agent_name=owner)
+            result = eval_region(plan_region, world, agent_name=owner)
+            # hindsight after-action review on plan completion.
+            substrates.on_plan_exit(world, owner, plan_name, plan_region, result)
+            return result
         finally:
             state.plan_stack.pop()
 

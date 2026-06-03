@@ -568,6 +568,50 @@ class DualProcessDecl:
 
 
 @dataclass
+class GriceanDecl:
+    """Gricean maxim checker config (research 4.5, Grice 1975).
+
+    Runs after a prompt returns, scoring the output against the four maxims.
+    `gate_maxims` names the maxims that REFUSE on violation; the rest only warn
+    (audit). evidence/topic keywords drive the quality + relation checks.
+    """
+    min_words: int = 1
+    max_words: int = 200
+    evidence_keywords: list[str] = field(default_factory=list)
+    topic_keywords: list[str] = field(default_factory=list)
+    gate_maxims: list[str] = field(default_factory=list)  # subset of quantity/quality/relation/manner
+
+
+@dataclass
+class HindsightDecl:
+    """After-action review config (research 4.10, Army AAR / Argyris & Schön).
+
+    When enabled, every completed plan gets a hindsight:learning review
+    comparing declared vs applied ethics (from the audit trail) and recording
+    the actual outcome. Reviews accumulate per agent; `fitness_from_reviews`
+    exposes them to tsr:evolve as a fitness signal.
+    """
+    enabled: bool = True
+
+
+@dataclass
+class ArgumentativeDecl:
+    """Argumentative-reasoning config (research 4.12, Mercier & Sperber).
+
+    After a (non-critic) prompt returns, fire the named `critic` prompt against
+    the output, score the counter-argument's strength from declared
+    `refutation_markers`, and log-odds-downweight the proposer's confidence.
+    Below `accept_threshold` the answer is refused rather than shipped.
+    """
+    critic: str = ""                               # name of the critic prompt
+    accept_threshold: float = 0.5
+    proposer_confidence: float = 0.9
+    refutation_markers: list[str] = field(default_factory=lambda: [
+        "however", "but", "false", "incorrect", "wrong", "lacks", "no evidence",
+    ])
+
+
+@dataclass
 class EvolveDecl:
     """A genetic evolution declaration (decision 17).
 
@@ -613,6 +657,9 @@ class Module:
     precaution: "PrecautionDecl | None" = None
     moral_foundations: "MoralFoundationsDecl | None" = None
     dual_process: "DualProcessDecl | None" = None
+    gricean: "GriceanDecl | None" = None
+    hindsight: "HindsightDecl | None" = None
+    argumentative: "ArgumentativeDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:

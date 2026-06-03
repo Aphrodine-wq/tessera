@@ -304,6 +304,42 @@ SUBSTRATE_DOCS: dict[str, dict] = {
         "maps_to": "Dual-process theory (Kahneman 2011; Evans & Stanovich 2013).",
         "status": "shipped",
     },
+
+    "gricean": {
+        "summary": "Cooperative-communication maxims — score (and optionally refuse) outgoing messages.",
+        "when_to_use": "When an agent's outputs should be informative, evidenced, relevant, and clear. "
+                       "After a prompt returns, the four Gricean maxims (quantity / quality / relation / "
+                       "manner) score the output; violations land in audit, and maxims named in `gate` "
+                       "refuse the output rather than ship it. Declare evidence + topic keywords to drive "
+                       "the quality and relation checks.",
+        "example_idiom": "gricean { min_words: 5 max_words: 150 evidence: [per, according] topic: [invoice] gate: [relation] }",
+        "maps_to": "Grice's Cooperative Principle (Grice 1975).",
+        "status": "shipped",
+    },
+
+    "hindsight": {
+        "summary": "After-action review — compare declared vs applied ethics + outcome when a plan completes.",
+        "when_to_use": "When you want a learning signal from what actually happened. On every plan "
+                       "completion the substrate records intended vs actual outcome and which declared "
+                       "ethics were actually applied (from the audit trail), emitting a "
+                       "`hindsight:learning` event. Reviews accumulate and feed tsr:evolve fitness via "
+                       "fitness_from_reviews — variants whose runs match their declared intent score higher.",
+        "example_idiom": "hindsight { enabled: true }",
+        "maps_to": "After-action review (Army AAR; Argyris & Schön 1978); hindsight-bias accounting (Fischhoff 1975).",
+        "status": "shipped",
+    },
+
+    "argumentative": {
+        "summary": "Adversarial second pass — a critic downweights the answer's confidence before shipping.",
+        "when_to_use": "When solo answers would be overconfident or sycophantic. After a prompt returns, "
+                       "the declared `critic` prompt argues against it; the counter-argument's strength "
+                       "log-odds-downweights the proposer's confidence, and an answer that falls below "
+                       "`accept_threshold` is refused rather than shipped. Reason as an argumentative "
+                       "faculty, not a solitary truth-seeker.",
+        "example_idiom": "argumentative { critic: challenge accept_threshold: 0.5 proposer_confidence: 0.9 }",
+        "maps_to": "Argumentative theory of reasoning (Mercier & Sperber 2011/2017).",
+        "status": "shipped",
+    },
 }
 
 

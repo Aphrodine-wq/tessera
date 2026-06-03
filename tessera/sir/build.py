@@ -45,6 +45,7 @@ from .nodes import (
     CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl, WelfareDecl,
     TraitDecl, WorkspaceDecl,
     PrecautionDecl, PrecautionThresholdSpec, MoralFoundationsDecl, DualProcessDecl,
+    GriceanDecl, HindsightDecl, ArgumentativeDecl,
 )
 
 
@@ -1561,6 +1562,116 @@ def _lower_dual_process(block: SubstrateBlock, mod: Module) -> None:
     mod.dual_process = decl
 
 
+# ---- gricean (research 4.5, Grice 1975) ----
+_GRICEAN_HEAD_RE = re.compile(r"gricean\s*\{")
+_GR_MINW_RE = re.compile(r"min_words\s*:\s*(\d+)")
+_GR_MAXW_RE = re.compile(r"max_words\s*:\s*(\d+)")
+_GR_EVID_RE = re.compile(r"evidence\s*:\s*\[([^\]]*)\]")
+_GR_TOPIC_RE = re.compile(r"topic\s*:\s*\[([^\]]*)\]")
+_GR_GATE_RE = re.compile(r"gate\s*:\s*\[([^\]]*)\]")
+_GR_MAXIMS = {"quantity", "quality", "relation", "manner"}
+
+
+def _split_list(raw: str) -> list[str]:
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def _lower_gricean(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _GRICEAN_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `gricean { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = GriceanDecl()
+    mw = _GR_MINW_RE.search(body)
+    if mw:
+        decl.min_words = int(mw.group(1))
+    xw = _GR_MAXW_RE.search(body)
+    if xw:
+        decl.max_words = int(xw.group(1))
+    if decl.min_words > decl.max_words:
+        raise SyntaxFail(
+            f"gricean: min_words ({decl.min_words}) > max_words ({decl.max_words})"
+        )
+    em = _GR_EVID_RE.search(body)
+    if em:
+        decl.evidence_keywords = _split_list(em.group(1))
+    tm = _GR_TOPIC_RE.search(body)
+    if tm:
+        decl.topic_keywords = _split_list(tm.group(1))
+    gm = _GR_GATE_RE.search(body)
+    if gm:
+        gates = _split_list(gm.group(1))
+        for g in gates:
+            if g not in _GR_MAXIMS:
+                raise SyntaxFail(
+                    f"gricean: unknown maxim {g!r} in gate (expected {sorted(_GR_MAXIMS)})"
+                )
+        decl.gate_maxims = gates
+    mod.gricean = decl
+
+
+# ---- hindsight (research 4.10) ----
+_HINDSIGHT_HEAD_RE = re.compile(r"hindsight\s*\{")
+_HS_ENABLED_RE = re.compile(r"enabled\s*:\s*(true|false)")
+
+
+def _lower_hindsight(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _HINDSIGHT_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `hindsight { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = HindsightDecl()
+    em = _HS_ENABLED_RE.search(body)
+    if em:
+        decl.enabled = (em.group(1) == "true")
+    mod.hindsight = decl
+
+
+# ---- argumentative (research 4.12, Mercier & Sperber) ----
+_ARG_HEAD_RE = re.compile(r"argumentative\s*\{")
+_ARG_CRITIC_RE = re.compile(r"critic\s*:\s*(\w+)")
+_ARG_ACCEPT_RE = re.compile(r"accept_threshold\s*:\s*([0-9.]+)")
+_ARG_CONF_RE = re.compile(r"proposer_confidence\s*:\s*([0-9.]+)")
+_ARG_MARKERS_RE = re.compile(r"refutation_markers\s*:\s*\[([^\]]*)\]")
+
+
+def _lower_argumentative(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _ARG_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `argumentative { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = ArgumentativeDecl()
+    cm = _ARG_CRITIC_RE.search(body)
+    if cm:
+        decl.critic = cm.group(1)
+    am = _ARG_ACCEPT_RE.search(body)
+    if am:
+        decl.accept_threshold = float(am.group(1))
+        if not (0.0 <= decl.accept_threshold <= 1.0):
+            raise SyntaxFail(
+                f"argumentative: accept_threshold must be in [0, 1] (got {decl.accept_threshold})"
+            )
+    pm = _ARG_CONF_RE.search(body)
+    if pm:
+        decl.proposer_confidence = float(pm.group(1))
+        if not (0.0 <= decl.proposer_confidence <= 1.0):
+            raise SyntaxFail(
+                f"argumentative: proposer_confidence must be in [0, 1] (got {decl.proposer_confidence})"
+            )
+    mm = _ARG_MARKERS_RE.search(body)
+    if mm:
+        markers = _split_list(mm.group(1))
+        if markers:
+            decl.refutation_markers = markers
+    mod.argumentative = decl
+
+
 _EVOLVE_HEAD_RE = re.compile(r"evolve\s+(\w+)\s*\{")
 _EVOLVE_POP_RE = re.compile(r"population\s*:\s*(\d+)")
 _EVOLVE_GENS_RE = re.compile(r"generations\s*:\s*(\d+)")
@@ -1717,6 +1828,12 @@ def lower(pm: ParsedModule) -> Module:
             _lower_moral_foundations(block, mod)
         elif block.substrate == "dual_process":
             _lower_dual_process(block, mod)
+        elif block.substrate == "gricean":
+            _lower_gricean(block, mod)
+        elif block.substrate == "hindsight":
+            _lower_hindsight(block, mod)
+        elif block.substrate == "argumentative":
+            _lower_argumentative(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

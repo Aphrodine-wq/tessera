@@ -476,6 +476,56 @@ def pass_12_moral_foundations(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_13_gricean(m: Module) -> list[Diagnostic]:
+    """Gricean lint. E900 (warning): gating the `quality` maxim without
+    evidence keywords, or `relation` without topic keywords, makes that gate
+    inert — those checks pass vacuously when the keyword list is empty."""
+    diags: list[Diagnostic] = []
+    g = m.gricean
+    if g is not None:
+        if "quality" in g.gate_maxims and not g.evidence_keywords:
+            diags.append(Diagnostic(
+                "E900", "warning", "gricean", "-",
+                "gating 'quality' but no evidence keywords declared — the quality "
+                "check passes vacuously, so the gate never fires",
+            ))
+        if "relation" in g.gate_maxims and not g.topic_keywords:
+            diags.append(Diagnostic(
+                "E900", "warning", "gricean", "-",
+                "gating 'relation' but no topic keywords declared — the relation "
+                "check passes vacuously, so the gate never fires",
+            ))
+    return diags
+
+
+def pass_14_hindsight(m: Module) -> list[Diagnostic]:
+    """Hindsight lint. E910 (warning): a review with no ethics and no intents
+    to compare degrades to outcome-recording only — usually not what's wanted."""
+    diags: list[Diagnostic] = []
+    if (m.hindsight is not None and m.hindsight.enabled
+            and m.ethics is None and not m.intents):
+        diags.append(Diagnostic(
+            "E910", "warning", "hindsight", "-",
+            "hindsight enabled but no tsr:ethics and no tsr:intent declared — "
+            "reviews record outcomes only, with nothing to compare against",
+        ))
+    return diags
+
+
+def pass_15_argumentative(m: Module) -> list[Diagnostic]:
+    """Argumentative lint. E920 (error): the named critic prompt must exist —
+    without it the adversarial pass can never run and the substrate is inert."""
+    diags: list[Diagnostic] = []
+    a = m.argumentative
+    if a is not None and a.critic and a.critic not in m.prompts:
+        diags.append(Diagnostic(
+            "E920", "error", "argumentative", "-",
+            f"critic prompt {a.critic!r} is not defined — the adversarial pass "
+            "can never run",
+        ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
@@ -490,6 +540,9 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_10_precaution(m),
         *pass_11_dual_process(m),
         *pass_12_moral_foundations(m),
+        *pass_13_gricean(m),
+        *pass_14_hindsight(m),
+        *pass_15_argumentative(m),
     ]
 
 
