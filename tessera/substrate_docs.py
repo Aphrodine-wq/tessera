@@ -340,6 +340,39 @@ SUBSTRATE_DOCS: dict[str, dict] = {
         "maps_to": "Argumentative theory of reasoning (Mercier & Sperber 2011/2017).",
         "status": "shipped",
     },
+
+    "causal": {
+        "summary": "Declare a causal DAG; query it for backdoor adjustment, identifiability, counterfactuals.",
+        "when_to_use": "When an agent reasons about cause, not just correlation. Declare variables + "
+                       "directed edges (acyclic, checked at compile time); then from a plan call "
+                       "`causal_backdoor(dag, treatment, outcome)`, `causal_identifiable(...)`, or "
+                       "`counterfactual(dag, equations, observed, intervention, outcome)`. Pearl's "
+                       "do-calculus, runnable from the file.",
+        "example_idiom": "causal Market { var Ad: Bool var Sales: Bool edge Ad -> Sales }",
+        "maps_to": "Causal inference (Pearl 2009): backdoor criterion, identifiability, counterfactuals.",
+        "status": "shipped",
+    },
+
+    "bayesian": {
+        "summary": "Declare a discrete Bayesian model; query exact posteriors from a plan.",
+        "when_to_use": "When an agent updates beliefs from evidence. Declare variables (values + priors) "
+                       "and likelihood tables, then call `bayesian_posterior(latent, observed, value)` for "
+                       "exact discrete inference. Composes with tsr:metacognition (temperature-calibrated "
+                       "posteriors) and tsr:precaution (posterior tail as the risk estimate).",
+        "example_idiom": "bayesian { var D: [yes, no] prior [0.01, 0.99] likelihood T given D { yes -> pos: 0.99 no -> pos: 0.05 } }",
+        "maps_to": "Bayesian inference; discrete graphical models (variational follow-up per Blei et al. 2017).",
+        "status": "shipped",
+    },
+
+    "metacognition": {
+        "summary": "Confidence calibration — temperature-scale probabilities so confidence tracks accuracy.",
+        "when_to_use": "When an agent's stated confidence should be trustworthy. Declare a temperature; "
+                       "`calibrate(confidence)` and tsr:bayesian posteriors are temperature-scaled (T>1 "
+                       "softens overconfidence), with the before/after emitted to audit for ECE tracking.",
+        "example_idiom": "metacognition { temperature: 1.5 n_bins: 15 track_ece: true }",
+        "maps_to": "Confidence calibration (Guo et al. 2017): temperature scaling, expected calibration error.",
+        "status": "shipped",
+    },
 }
 
 

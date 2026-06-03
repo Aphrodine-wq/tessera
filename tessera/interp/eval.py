@@ -446,6 +446,13 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         callee_name = n.attributes.get("callee") or values[n.inputs[0]]
         arg_vals = [values[i] for i in n.inputs[1:]]
 
+        # 0. Built-in callables: value constructors (__list__/__record__ from
+        #    the [..]/{..} literal syntax) + reasoning-tool callables.
+        from .builtins import BUILTINS
+        builtin = BUILTINS.get(callee_name)
+        if builtin is not None:
+            return builtin(n, arg_vals, world, agent_name)
+
         # 1. Plain logic function
         fn_region = world.module.functions.get(callee_name)
         if fn_region is not None:

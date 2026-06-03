@@ -355,7 +355,64 @@ def _emit_primary(p: _Parser, region: Region, block: SubstrateBlock) -> str:
         p.eat(")")
         return inner
 
+    # list literal `[e1, e2, ...]` → builtin __list__
+    if tok == "[":
+        p.eat("[")
+        elems: list[str] = []
+        if p.peek() != "]":
+            elems.append(_emit_expr(p, region, block))
+            while p.peek() == ",":
+                p.eat(",")
+                if p.peek() == "]":  # tolerate trailing comma
+                    break
+                elems.append(_emit_expr(p, region, block))
+        p.eat("]")
+        return _emit_builtin_call(region, block, "__list__", elems)
+
+    # record literal `{k: v, ...}` → builtin __record__ (keys are static idents/strings)
+    if tok == "{":
+        p.eat("{")
+        keys: list[str] = []
+        vals: list[str] = []
+        if p.peek() != "}":
+            while True:
+                k = p.eat()
+                if k.startswith('"'):
+                    k = k[1:-1]
+                p.eat(":")
+                vals.append(_emit_expr(p, region, block))
+                keys.append(k)
+                if p.peek() == ",":
+                    p.eat(",")
+                    if p.peek() == "}":  # tolerate trailing comma
+                        break
+                    continue
+                break
+        p.eat("}")
+        return _emit_builtin_call(region, block, "__record__", vals, record_keys=keys)
+
     raise SyntaxFail(f"unexpected token {tok!r}")
+
+
+def _emit_builtin_call(region: Region, block: SubstrateBlock, callee: str,
+                       arg_ids: list[str], *, record_keys: list[str] | None = None) -> str:
+    """Emit an Apply node to a builtin (same shape as a normal call: a callee
+    Const at inputs[0], then the argument value-ids)."""
+    callee_node = region.add(Node(
+        op=Op.Const,
+        attributes={"value": callee, "type": "FnRef"},
+        substrate="logic", output_type="FnRef", provenance=block.span,
+    ))
+    attrs: dict = {"callee": callee}
+    if record_keys is not None:
+        attrs["record_keys"] = record_keys
+    applied = region.add(Node(
+        op=Op.Apply,
+        inputs=[callee_node.id, *arg_ids],
+        attributes=attrs,
+        substrate="logic", output_type="any", provenance=block.span,
+    ))
+    return applied.id
 
 
 # --- block-level handlers ---------------------------------------------------
