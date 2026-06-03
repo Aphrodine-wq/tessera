@@ -59,7 +59,7 @@ tessera/
 ├── verify/        local verification passes + diagnostics
 ├── interp/        tree-walking evaluator, actor scheduler, workspace runtime
 ├── substrate_docs.py    English descriptions of every substrate category
-├── cli.py         tessera compile / vault / substrates commands
+├── cli.py         tessera compile / vault / substrates / audit / facts commands
 └── adapters/
     ├── aeon/      → AEON (formal verification, 73 engines)
     ├── semantic/  → local SQLite fact store for memory:semantic
@@ -135,6 +135,11 @@ tessera compile examples/researcher.t.md --aeon \
 tessera audit query --agent MigrationAdvisor --intent advise_safely --count
 tessera audit query --action skill_promotion_pending
 tessera audit purge --days 30   # operational only; governance untouched
+
+# Inspect / clean the memory:semantic fact store (~/.tessera/semantic.db)
+tessera facts list                    # schema breakdown when unfiltered
+tessera facts search retainage        # substring match across fields
+tessera facts clear --schema note     # needs a filter (or --all) to delete
 
 # Pick an LLM backend
 TESSERA_LLM_BACKEND=ollama  TESSERA_OLLAMA_MODEL=glm-4.6:cloud tessera compile ...

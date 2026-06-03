@@ -318,6 +318,68 @@ def _cmd_audit_assemble_corpus(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_facts(rows: list[dict], *, as_json: bool) -> None:
+    import json
+    for r in rows:
+        if as_json:
+            print(json.dumps(r))
+        else:
+            fields = json.dumps(r["fields"])
+            if len(fields) > 80:
+                fields = fields[:77] + "..."
+            print(f"{r['created_at']}  {r['schema']}  {r['agent_id'] or '-'}  {fields}")
+
+
+def _cmd_facts_list(args: argparse.Namespace) -> int:
+    from .adapters.semantic import query_facts, schema_summary
+    has_filter = any((args.schema, args.agent, args.plan, args.contains))
+    if not has_filter and not args.json:
+        summary = schema_summary()
+        total = sum(n for _, n in summary)
+        for sch, n in summary:
+            print(f"  {n:>6}  {sch}")
+        print(f"# {total} fact(s) across {len(summary)} schema(s)")
+        return 0
+    rows = query_facts(
+        schema=args.schema,
+        agent_id=args.agent,
+        plan_id=args.plan,
+        contains=args.contains,
+        limit=args.limit,
+    )
+    _print_facts(rows, as_json=args.json)
+    if args.count:
+        print(f"# {len(rows)} fact(s)", file=sys.stderr)
+    return 0
+
+
+def _cmd_facts_search(args: argparse.Namespace) -> int:
+    from .adapters.semantic import query_facts
+    rows = query_facts(contains=args.query, schema=args.schema, limit=args.limit)
+    _print_facts(rows, as_json=args.json)
+    return 0
+
+
+def _cmd_facts_clear(args: argparse.Namespace) -> int:
+    from .adapters.semantic import clear_facts
+    try:
+        n = clear_facts(
+            schema=args.schema,
+            agent_id=args.agent,
+            before=args.before,
+            all=args.all,
+        )
+    except ValueError:
+        print(
+            "refusing to clear all facts without --all "
+            "(or a --schema/--agent/--before filter)",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"cleared {n} fact(s)")
+    return 0
+
+
 def _cmd_version(_args: argparse.Namespace) -> int:
     print(f"tessera {__version__}")
     return 0
@@ -408,6 +470,35 @@ def main(argv: list[str] | None = None) -> int:
                              help="Build a training-corpus JSONL for a procedural skill")
     audc.add_argument("skill")
     audc.set_defaults(fn=_cmd_audit_assemble_corpus)
+
+    # facts — inspect/clean the memory:semantic store (~/.tessera/semantic.db)
+    fct = sub.add_parser("facts", help="Inspect or clean the semantic fact store")
+    fctsub = fct.add_subparsers(dest="facts_cmd", required=True)
+
+    fctl = fctsub.add_parser("list", help="List facts, or a schema breakdown when unfiltered")
+    fctl.add_argument("--schema")
+    fctl.add_argument("--agent")
+    fctl.add_argument("--plan")
+    fctl.add_argument("--contains", help="substring match against field JSON")
+    fctl.add_argument("--limit", type=int, default=100)
+    fctl.add_argument("--json", action="store_true", help="emit one JSON object per line")
+    fctl.add_argument("--count", action="store_true",
+                      help="Print row count to stderr after results")
+    fctl.set_defaults(fn=_cmd_facts_list)
+
+    fcts = fctsub.add_parser("search", help="Find facts whose fields contain a substring")
+    fcts.add_argument("query")
+    fcts.add_argument("--schema")
+    fcts.add_argument("--limit", type=int, default=100)
+    fcts.add_argument("--json", action="store_true", help="emit one JSON object per line")
+    fcts.set_defaults(fn=_cmd_facts_search)
+
+    fctc = fctsub.add_parser("clear", help="Delete facts (needs a filter or --all)")
+    fctc.add_argument("--schema")
+    fctc.add_argument("--agent")
+    fctc.add_argument("--before", help="ISO timestamp — delete facts created before it")
+    fctc.add_argument("--all", action="store_true", help="Delete every fact (required to wipe)")
+    fctc.set_defaults(fn=_cmd_facts_clear)
 
     # evolve
     ev = sub.add_parser("evolve", help="Run the tsr:evolve block in a file")
