@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -163,6 +164,39 @@ def schema_summary(*, db_path: str | Path | None = None) -> list[tuple[str, int]
             "SELECT schema, COUNT(*) FROM facts GROUP BY schema ORDER BY COUNT(*) DESC"
         ).fetchall()
     return [(sch, n) for sch, n in rows]
+
+
+_WORD_RE = re.compile(r"[a-z0-9]{3,}")
+_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "that", "this", "you", "are", "was", "what",
+    "from", "have", "has", "but", "not", "all", "any", "can", "will", "your",
+    "about", "into", "out", "how", "why", "who", "when", "where", "which",
+})
+
+
+def _keywords(text: str) -> set[str]:
+    return {w for w in _WORD_RE.findall(text.lower()) if w not in _STOPWORDS}
+
+
+def rank_facts(facts: list[dict], query: str, *, limit: int = 5) -> list[dict]:
+    """Rank fact dicts by keyword overlap of their fields against `query`.
+
+    Pure function (no DB) so it's unit-testable and works on facts from either
+    the persistent store or an in-World ephemeral shadow. Facts that share no
+    keyword with the query are kept only if nothing scores — then the most
+    recent win (by `created_at`, blank sorts last). Returns at most `limit`.
+    """
+    kws = _keywords(query)
+
+    def score(f: dict) -> int:
+        blob = json.dumps(f.get("fields", {})).lower()
+        return sum(1 for k in kws if k in blob)
+
+    scored = [(score(f), f.get("created_at") or "", f) for f in facts]
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    positive = [t for t in scored if t[0] > 0]
+    chosen = positive or scored
+    return [t[2] for t in chosen[:limit]]
 
 
 def clear_facts(

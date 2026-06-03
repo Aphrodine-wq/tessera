@@ -871,6 +871,57 @@ def _ensure_traits_resolved(world: World, agent_name: str) -> None:
 # ----- prompt / tool / neural dispatchers ----------------------------------
 
 
+def _auto_recall_disabled() -> bool:
+    import os
+    return os.environ.get("TESSERA_NO_AUTO_RECALL") == "1"
+
+
+def _build_recall(world, agent_name, state, query, *,
+                  max_facts=4, max_events=4, char_budget=1200):
+    """Assemble a <recalled-context> block from the agent's memory.
+
+    Pulls relevant semantic facts (persistent store + in-World ephemeral
+    shadow, ranked by keyword overlap with the prompt) and the most recent
+    episodic events. Returns (block_str, n_semantic, n_episodic); block is ""
+    when there's nothing to recall. This is what makes an agent use its memory
+    without the plan author wiring an explicit lookup.
+    """
+    if _auto_recall_disabled():
+        return "", 0, 0
+    module = world.module
+    lines: list[str] = []
+    n_sem = 0
+
+    if module.knowledge_schemas:
+        from ..adapters.semantic import query_facts, rank_facts
+        candidates: list[dict] = []
+        for sname, sdecl in module.knowledge_schemas.items():
+            if sdecl.persistent:
+                candidates.extend(query_facts(schema=sname, limit=50))
+            else:
+                for r in world.ephemeral_semantic.get(sname, []):
+                    candidates.append({"schema": sname, "fields": r["fields"],
+                                       "created_at": ""})
+        for f in rank_facts(candidates, query, limit=max_facts):
+            fields = ", ".join(f"{k}={v}" for k, v in f["fields"].items())
+            lines.append(f"- {f['schema']}: {fields}")
+            n_sem += 1
+
+    n_epi = 0
+    if state and state.episodic:
+        for (name, args, _seq) in state.episodic[-max_events:]:
+            arglist = ", ".join(str(a) for a in args)
+            lines.append(f"- event {name}({arglist})")
+            n_epi += 1
+
+    if not lines:
+        return "", 0, 0
+    block = "<recalled-context>\n" + "\n".join(lines) + "\n</recalled-context>\n"
+    if len(block) > char_budget:
+        block = block[:char_budget] + "\n</recalled-context>\n"
+    return block, n_sem, n_epi
+
+
 def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     from ..adapters.llm import get_backend
     from ..cache import semantic_cache_lookup, semantic_cache_put
@@ -927,8 +978,17 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         fired_names = [t.name for t in fired]
         preamble += trait_preamble(fired)
 
-    if preamble:
-        rendered = preamble + rendered
+    # Auto-recall: inject the agent's relevant memory (semantic facts +
+    # recent episodic events) between the posture frame and the task body, so
+    # it's part of the cache key. Values → posture → recalled context → task.
+    recall_block = ""
+    recalled = {"semantic": 0, "episodic": 0}
+    if agent_name is not None:
+        recall_block, n_sem, n_epi = _build_recall(world, agent_name, state, rendered)
+        recalled = {"semantic": n_sem, "episodic": n_epi}
+
+    if preamble or recall_block:
+        rendered = preamble + recall_block + rendered
 
     # Semantic cache — short-circuit if a near-identical prompt has been seen.
     cached = semantic_cache_lookup(rendered)
@@ -936,7 +996,7 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         world.region_results.setdefault("_semantic_cache_hits", 0)
         world.region_results["_semantic_cache_hits"] += 1
         world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
-                     ethics_applied=ethics_applied, cost=0.0, cached=True)
+                     ethics_applied=ethics_applied, recalled=recalled, cost=0.0, cached=True)
         if agent_name is not None:
             gated = substrates.on_prompt_output(world, agent_name, prompt.name, cached["text"])
             if gated is not None:
@@ -949,7 +1009,8 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     world.region_results["_prompt_cost"] += result.cost_dollars
     semantic_cache_put(rendered, result.text, backend=result.backend, model=result.model)
     world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
-                 ethics_applied=ethics_applied, cost=result.cost_dollars, cached=False)
+                 ethics_applied=ethics_applied, recalled=recalled,
+                 cost=result.cost_dollars, cached=False)
     if agent_name is not None:
         gated = substrates.on_prompt_output(world, agent_name, prompt.name, result.text)
         if gated is not None:

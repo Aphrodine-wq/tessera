@@ -23,3 +23,10 @@ def isolate_tessera_stores(tmp_path, monkeypatch):
     # Force the deterministic backend in tests so prompts don't hit the
     # network and so output is reproducible across machines.
     monkeypatch.setenv("TESSERA_LLM_BACKEND", "noop")
+    # Reset the process-global cache singletons so in-memory state from a prior
+    # test can never bleed into this one (the caches are keyed by path+mtime,
+    # but resetting is the cheap, certain guarantee of isolation).
+    from tessera import cache as _cache
+    _cache._SEM_MEM = None
+    _cache._VERIFY_MEM = None
+    _cache.invalidate_parse_cache()

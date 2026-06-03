@@ -122,6 +122,31 @@ def _cmd_vault_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_vault_ingest(args: argparse.Namespace) -> int:
+    from .adapters.obsidian.ingest import ingest_vault
+    report = ingest_vault(
+        args.vault, args.out,
+        db_path=args.db,
+        dry_run=args.dry_run,
+        transcripts=args.transcripts,
+        limit=args.limit,
+        max_agents=args.max_agents,
+        verbose=args.verbose,
+    )
+    if report.aborted:
+        print(report.aborted, file=sys.stderr)
+        return 2
+    print(
+        f"{'[dry-run] ' if args.dry_run else ''}"
+        f"scanned {report.scanned} · facts +{report.facts_new} "
+        f"({report.facts_existing} existing) · transcripts +{report.transcripts_indexed} "
+        f"· agents {len(report.agents_emitted)} · skipped {len(report.skipped)}"
+    )
+    if not args.dry_run:
+        print(f"report → {args.out}/INGEST_REPORT.md")
+    return 0
+
+
 def _cmd_substrates(_args: argparse.Namespace) -> int:
     print(render_substrates())
     return 0
@@ -427,6 +452,25 @@ def main(argv: list[str] | None = None) -> int:
     vnew.add_argument("--force", action="store_true",
                       help="Overwrite if file exists")
     vnew.set_defaults(fn=_cmd_vault_new)
+
+    ving = vsub.add_parser(
+        "ingest",
+        help="Ingest a whole vault: prose → facts, agent-shaped notes → .t.md "
+             "(non-destructive; source vault never modified)")
+    ving.add_argument("vault")
+    ving.add_argument("--out", required=True,
+                      help="Output dir for generated agents + report")
+    ving.add_argument("--db", help="Override semantic db path (default ~/.tessera/semantic.db)")
+    ving.add_argument("--dry-run", action="store_true",
+                      help="Classify and report only; write no facts or files")
+    ving.add_argument("--transcripts", default="skip",
+                      choices=["skip", "stub", "full"],
+                      help="How to handle raw conversation transcripts (default: skip)")
+    ving.add_argument("--limit", type=int, help="Cap files processed (for testing)")
+    ving.add_argument("--max-agents", type=int, default=80,
+                      help="Abort if the agent-shaped set exceeds this (default 80)")
+    ving.add_argument("-v", "--verbose", action="store_true")
+    ving.set_defaults(fn=_cmd_vault_ingest)
 
     # substrates
     spr = sub.add_parser("substrates", help="Print all substrate categories in English")
