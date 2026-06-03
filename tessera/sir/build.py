@@ -44,6 +44,7 @@ from .nodes import (
     ASTDecl, BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
     CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl, WelfareDecl,
     TraitDecl, WorkspaceDecl,
+    PrecautionDecl, PrecautionThresholdSpec, MoralFoundationsDecl, DualProcessDecl,
 )
 
 
@@ -1439,6 +1440,127 @@ def _lower_metacognition(block: SubstrateBlock, mod: Module) -> None:
     mod.metacognition = decl
 
 
+# ---- precaution (research 4.7, Hansson 2003) ----
+_PRECAUTION_HEAD_RE = re.compile(r"precaution\s*\{")
+_PRECAUTION_DEFAULT_RE = re.compile(r"default_tail\s*:\s*([0-9.]+)")
+_PRECAUTION_THRESH_RE = re.compile(r"threshold\s+(\w+)\s*\{([^}]*)\}")
+_PREC_HARM_RE = re.compile(r"harm\s*:\s*([0-9.]+)")
+_PREC_IRREV_RE = re.compile(r"irreversible\s*:\s*(true|false)")
+_PREC_MAXTAIL_RE = re.compile(r"max_tail\s*:\s*([0-9.]+)")
+
+
+def _lower_precaution(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _PRECAUTION_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `precaution { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = PrecautionDecl()
+    dm = _PRECAUTION_DEFAULT_RE.search(body)
+    if dm:
+        decl.default_tail = float(dm.group(1))
+        if not (0.0 <= decl.default_tail <= 1.0):
+            raise SyntaxFail(
+                f"precaution: default_tail must be in [0, 1] (got {decl.default_tail})"
+            )
+    for tm in _PRECAUTION_THRESH_RE.finditer(body):
+        name, inner = tm.group(1), tm.group(2)
+        spec = PrecautionThresholdSpec(action_class=name)
+        hm = _PREC_HARM_RE.search(inner)
+        if hm:
+            spec.harm_magnitude = float(hm.group(1))
+        im = _PREC_IRREV_RE.search(inner)
+        if im:
+            spec.irreversible = (im.group(1) == "true")
+        xm = _PREC_MAXTAIL_RE.search(inner)
+        if xm:
+            spec.max_tail_probability = float(xm.group(1))
+            if not (0.0 <= spec.max_tail_probability <= 1.0):
+                raise SyntaxFail(
+                    f"precaution threshold {name!r}: max_tail must be in [0, 1]"
+                )
+        decl.thresholds.append(spec)
+    mod.precaution = decl
+
+
+# ---- moral_foundations (research 4.9, Haidt/Graham) ----
+_MF_HEAD_RE = re.compile(r"moral_foundations\s*\{")
+_MF_WEIGHTS_RE = re.compile(r"weights\s*\{([^}]*)\}")
+_MF_WEIGHT_KV_RE = re.compile(r"(\w+)\s*:\s*([0-9.]+)")
+_MF_VIOLATES_RE = re.compile(r"violates\s+(\w+)\s*:\s*\[([^\]]*)\]")
+_MF_ACCEPT_RE = re.compile(r"accept_threshold\s*:\s*(-?[0-9.]+)")
+
+
+def _lower_moral_foundations(block: SubstrateBlock, mod: Module) -> None:
+    from ..moral_foundations import CANONICAL_FOUNDATIONS
+    src = block.body
+    m = _MF_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `moral_foundations { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = MoralFoundationsDecl()
+    wm = _MF_WEIGHTS_RE.search(body)
+    if wm:
+        for km in _MF_WEIGHT_KV_RE.finditer(wm.group(1)):
+            axis, val = km.group(1), float(km.group(2))
+            if axis not in CANONICAL_FOUNDATIONS:
+                raise SyntaxFail(
+                    f"moral_foundations: unknown axis {axis!r} "
+                    f"(expected one of {list(CANONICAL_FOUNDATIONS)})"
+                )
+            if val < 0:
+                raise SyntaxFail(
+                    f"moral_foundations: weight for {axis!r} must be >= 0 (got {val})"
+                )
+            decl.weights[axis] = val
+    for vm in _MF_VIOLATES_RE.finditer(body):
+        axis = vm.group(1)
+        if axis not in CANONICAL_FOUNDATIONS:
+            raise SyntaxFail(f"moral_foundations: unknown axis {axis!r} in violates")
+        decl.violations[axis] = [s.strip() for s in vm.group(2).split(",") if s.strip()]
+    am = _MF_ACCEPT_RE.search(body)
+    if am:
+        decl.accept_threshold = float(am.group(1))
+    mod.moral_foundations = decl
+
+
+# ---- dual_process (research 4.1, Kahneman; Evans & Stanovich) ----
+_DP_HEAD_RE = re.compile(r"dual_process\s*\{")
+_DP_PREFERRED_RE = re.compile(r"preferred\s*:\s*(fast|slow)")
+_DP_CONF_THRESH_RE = re.compile(r"confidence_threshold\s*:\s*([0-9.]+)")
+_DP_BUDGET_THRESH_RE = re.compile(r"budget_threshold\s*:\s*([0-9.]+)")
+_DP_DEFAULT_CONF_RE = re.compile(r"default_confidence\s*:\s*([0-9.]+)")
+_DP_IRREV_RE = re.compile(r"irreversible\s*:\s*\[([^\]]*)\]")
+
+
+def _lower_dual_process(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _DP_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `dual_process { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = DualProcessDecl()
+    pm = _DP_PREFERRED_RE.search(body)
+    if pm:
+        decl.preferred = pm.group(1)
+    for rx, attr in ((_DP_CONF_THRESH_RE, "confidence_threshold"),
+                     (_DP_BUDGET_THRESH_RE, "budget_threshold"),
+                     (_DP_DEFAULT_CONF_RE, "default_confidence")):
+        mm = rx.search(body)
+        if mm:
+            v = float(mm.group(1))
+            if not (0.0 <= v <= 1.0):
+                raise SyntaxFail(f"dual_process: {attr} must be in [0, 1] (got {v})")
+            setattr(decl, attr, v)
+    im = _DP_IRREV_RE.search(body)
+    if im:
+        decl.irreversible_terms = [s.strip() for s in im.group(1).split(",") if s.strip()]
+    mod.dual_process = decl
+
+
 _EVOLVE_HEAD_RE = re.compile(r"evolve\s+(\w+)\s*\{")
 _EVOLVE_POP_RE = re.compile(r"population\s*:\s*(\d+)")
 _EVOLVE_GENS_RE = re.compile(r"generations\s*:\s*(\d+)")
@@ -1589,6 +1711,12 @@ def lower(pm: ParsedModule) -> Module:
             _lower_iit(block, mod)
         elif block.substrate == "welfare":
             _lower_welfare(block, mod)
+        elif block.substrate == "precaution":
+            _lower_precaution(block, mod)
+        elif block.substrate == "moral_foundations":
+            _lower_moral_foundations(block, mod)
+        elif block.substrate == "dual_process":
+            _lower_dual_process(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
         elif block.substrate == "eval":

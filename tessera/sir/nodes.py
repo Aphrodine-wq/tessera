@@ -513,6 +513,61 @@ class MetacognitionDecl:
 
 
 @dataclass
+class PrecautionThresholdSpec:
+    """One author-declared harm threshold inside a tsr:precaution block."""
+    action_class: str
+    harm_magnitude: float = 1.0
+    irreversible: bool = False
+    max_tail_probability: float = 0.01
+
+
+@dataclass
+class PrecautionDecl:
+    """Precautionary gate config (research 4.7, Hansson 2003).
+
+    Each threshold names an action class (matched against the rendered prompt
+    text + action label, like tsr:autonomy). `default_tail` is the assumed tail
+    probability when no evidence (e.g. a tsr:bayesian posterior) pins it down —
+    high by default, because precaution shifts the burden of proof onto the
+    action. An irreversible action class with tail > 0.001 is refused outright.
+    """
+    thresholds: list[PrecautionThresholdSpec] = field(default_factory=list)
+    default_tail: float = 0.5
+
+
+@dataclass
+class MoralFoundationsDecl:
+    """Moral Foundations gate config (research 4.9, Haidt/Graham).
+
+    `weights` is the agent's per-axis value vector (care/fairness/loyalty/
+    authority/sanctity/liberty). `violations` maps a foundation to the terms
+    that, when matched in an action, score that axis negative. An action that
+    scores negative on a weighted axis (weight > 0.1) is refused — "even a small
+    commitment to fairness rules out unfair actions."
+    """
+    weights: dict[str, float] = field(default_factory=dict)
+    violations: dict[str, list[str]] = field(default_factory=dict)
+    accept_threshold: float = 0.0
+
+
+@dataclass
+class DualProcessDecl:
+    """Dual-process router config (research 4.1, Kahneman; Evans & Stanovich).
+
+    At plan entry the router picks fast vs slow from the agent's confidence
+    (the `_confidence` belief, else `default_confidence`), the remaining budget,
+    and whether the plan touches an irreversible action term. The decision is
+    audit-emitted as `dual_process:route` and stored on the agent so downstream
+    steps can read the active mode.
+    """
+    preferred: str = "fast"                       # "fast" | "slow"
+    confidence_threshold: float = 0.7
+    budget_threshold: float = 0.2
+    default_confidence: float = 1.0
+    irreversible_terms: list[str] = field(default_factory=list)
+
+
+@dataclass
 class EvolveDecl:
     """A genetic evolution declaration (decision 17).
 
@@ -555,6 +610,9 @@ class Module:
     tom: "ToMDecl | None" = None
     iit: "IITDecl | None" = None
     welfare: "WelfareDecl | None" = None
+    precaution: "PrecautionDecl | None" = None
+    moral_foundations: "MoralFoundationsDecl | None" = None
+    dual_process: "DualProcessDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:

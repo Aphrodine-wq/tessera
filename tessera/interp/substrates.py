@@ -121,6 +121,87 @@ def on_plan_enter(world, owner: str, plan_name: str):
                     policy="ast",
                 )
 
+    # --- dual_process: route this plan fast vs slow (audit + store mode) ---
+    if module.dual_process is not None:
+        from ..dual_process import route
+        dp = module.dual_process
+        try:
+            conf = float(state.working_memory.get("_confidence", dp.default_confidence))
+        except (TypeError, ValueError):
+            conf = dp.default_confidence
+        hay = plan_name.lower()
+        irreversible = any(t.lower() in hay for t in dp.irreversible_terms)
+        decision = route(
+            preferred=dp.preferred,
+            confidence=conf,
+            budget=1.0,  # budget tracking is not yet wired; assume ample
+            confidence_threshold=dp.confidence_threshold,
+            budget_threshold=dp.budget_threshold,
+            irreversible=irreversible,
+        )
+        sub["dual_process_mode"] = decision.mode
+        world.record(owner, "dual_process:route", mode=decision.mode,
+                     rationale=decision.rationale, confidence=round(conf, 4),
+                     forced_slow=decision.forced_slow, cycle=cycle)
+
+    return None
+
+
+def on_prompt_input(world, owner: str, prompt_name: str, rendered: str, caps):
+    """Pre-generation action gates: precaution and moral_foundations.
+
+    Both run BEFORE the LLM call (like tsr:autonomy), matching declared action
+    classes / violation terms against the rendered prompt text + action label.
+    Returns a refusal string to short-circuit the prompt, else None.
+    """
+    module = world.module
+    label = f"prompt:{prompt_name}"
+    hay = f"{rendered} {label}".lower()
+
+    # --- precaution: refuse high-tail / irreversible action classes ---
+    if module.precaution is not None:
+        from ..precaution import HarmThreshold, precaution_gate
+        for spec in module.precaution.thresholds:
+            if spec.action_class.lower() not in hay:
+                continue
+            threshold = HarmThreshold(
+                action_class=spec.action_class,
+                harm_magnitude=spec.harm_magnitude,
+                irreversible=spec.irreversible,
+                max_tail_probability=spec.max_tail_probability,
+            )
+            # No evidence pins the tail down yet (a tsr:bayesian posterior will,
+            # in Phase 4) — assume the declared default. Precaution shifts the
+            # burden onto the action.
+            decision = precaution_gate(threshold, module.precaution.default_tail)
+            if decision.verdict == "refuse":
+                world.record(owner, f"precaution:refuse:{prompt_name}",
+                             action_class=spec.action_class,
+                             tail=module.precaution.default_tail,
+                             rationale=decision.rationale)
+                return f"[precaution-refused: {spec.action_class} — {decision.rationale}]"
+
+    # --- moral_foundations: refuse actions that violate a weighted axis ---
+    if module.moral_foundations is not None:
+        from ..moral_foundations import (ActionMoralScore, FoundationWeights,
+                                          score_action)
+        mf = module.moral_foundations
+        matched: dict[str, float] = {}
+        for axis, terms in mf.violations.items():
+            if any(t.lower() in hay for t in terms):
+                matched[axis] = -1.0
+        if matched:
+            action = ActionMoralScore(**matched)
+            weights = FoundationWeights(**mf.weights) if mf.weights else FoundationWeights()
+            decision = score_action(action, weights,
+                                    accept_threshold=mf.accept_threshold)
+            if not decision.accept:
+                world.record(owner, f"moral_foundations:refuse:{prompt_name}",
+                             refuse_axes=decision.refuse_axes,
+                             weighted_total=round(decision.weighted_total, 4))
+                return (f"[moral-refused: violates {decision.refuse_axes} "
+                        f"(weighted_total={decision.weighted_total:.2f})]")
+
     return None
 
 

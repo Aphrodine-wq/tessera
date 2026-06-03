@@ -891,6 +891,12 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
                 world.record(agent_name, f"approval_required:{prompt.name}",
                              needs=term, level=auto.level, acted=True)
 
+    # Precaution + moral-foundations action gates — also BEFORE any cost.
+    if agent_name is not None:
+        blocked = substrates.on_prompt_input(world, agent_name, prompt.name, rendered, caps)
+        if blocked is not None:
+            return blocked
+
     # Build the prompt preamble BEFORE the cache lookup (a framed prompt is a
     # genuinely different request, so it caches separately). Ethics is outermost
     # — values frame first, then cognitive posture (traits).

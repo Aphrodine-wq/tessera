@@ -268,6 +268,42 @@ SUBSTRATE_DOCS: dict[str, dict] = {
                    "machine ToM (Rabinowitz et al. 2018).",
         "status": "shipped",
     },
+
+    "precaution": {
+        "summary": "Asymmetric-risk gate — refuse irreversible / high-tail actions under uncertainty.",
+        "when_to_use": "When an action could cause large or irreversible harm and you'd rather a wrong "
+                       "refuse than a wrong allow. Declare per-action-class thresholds; the gate matches "
+                       "them against the action (like tsr:autonomy) and refuses when the tail probability "
+                       "exceeds the max — and refuses any irreversible class outright unless evidence (a "
+                       "tsr:bayesian posterior) drives the tail below 0.001. Burden of proof on the action.",
+        "example_idiom": "precaution { default_tail: 0.5 threshold delete { harm: 10 irreversible: true max_tail: 0.01 } }",
+        "maps_to": "Precautionary principle (Hansson 2003); antifragility under fat tails (Taleb 2012).",
+        "status": "shipped",
+    },
+
+    "moral_foundations": {
+        "summary": "Value-pluralist gate — weight six moral axes and refuse actions that violate a weighted one.",
+        "when_to_use": "When an agent's values should be explicit and plural rather than one-axis utility. "
+                       "Declare per-axis weights (care/fairness/loyalty/authority/sanctity/liberty) and the "
+                       "terms that violate each; an action matching a violation term on an axis the agent "
+                       "weights (> 0.1) is refused. Lets a contractor agent (care+fairness heavy) differ "
+                       "from a regulatory one (authority heavy) in the file.",
+        "example_idiom": "moral_foundations { weights { care: 1.0 fairness: 1.0 } violates fairness: [defraud, cheat] }",
+        "maps_to": "Moral Foundations Theory (Haidt 2012; Graham et al. 2013); value pluralism.",
+        "status": "shipped",
+    },
+
+    "dual_process": {
+        "summary": "System 1/2 router — pick fast vs slow per plan from confidence, budget, irreversibility.",
+        "when_to_use": "When some plans should run fast (cached, low-cost) and others deliberatively. At "
+                       "plan entry the router reads the agent's confidence (the `_confidence` belief, else "
+                       "default) and whether the plan touches an irreversible term, then routes fast/slow "
+                       "and audits the decision as `dual_process:route`. Irreversible or low-confidence "
+                       "plans are forced slow; the active mode is stored for downstream steps to read.",
+        "example_idiom": "dual_process { preferred: fast confidence_threshold: 0.7 irreversible: [delete, deploy] }",
+        "maps_to": "Dual-process theory (Kahneman 2011; Evans & Stanovich 2013).",
+        "status": "shipped",
+    },
 }
 
 

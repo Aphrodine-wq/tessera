@@ -433,6 +433,49 @@ def pass_9_consciousness_claim_check(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_10_precaution(m: Module) -> list[Diagnostic]:
+    """Precaution gate lint. E800 (warning): a precaution block with no
+    thresholds never fires — almost certainly an authoring mistake."""
+    diags: list[Diagnostic] = []
+    if m.precaution is not None and not m.precaution.thresholds:
+        diags.append(Diagnostic(
+            "E800", "warning", "precaution", "-",
+            "precaution block declares no thresholds — the gate can never fire",
+        ))
+    return diags
+
+
+def pass_11_dual_process(m: Module) -> list[Diagnostic]:
+    """Dual-process router lint. E810 (warning): when `preferred: slow`,
+    every plan already routes slow, so `irreversible_terms` are dead config."""
+    diags: list[Diagnostic] = []
+    dp = m.dual_process
+    if dp is not None and dp.preferred == "slow" and dp.irreversible_terms:
+        diags.append(Diagnostic(
+            "E810", "warning", "dual_process", "-",
+            "preferred=slow already routes every plan slow; irreversible_terms are redundant",
+        ))
+    return diags
+
+
+def pass_12_moral_foundations(m: Module) -> list[Diagnostic]:
+    """Moral-foundations lint. E820 (warning): declaring violation terms for a
+    foundation whose weight is <= 0.1 is dead config — score_action only refuses
+    on axes with weight > 0.1, so those violations can never trigger a refusal."""
+    diags: list[Diagnostic] = []
+    mf = m.moral_foundations
+    if mf is not None:
+        for axis in mf.violations:
+            w = mf.weights.get(axis, 0.5)  # FoundationWeights default is 0.5
+            if w <= 0.1:
+                diags.append(Diagnostic(
+                    "E820", "warning", f"moral_foundations:{axis}", "-",
+                    f"violates {axis} declared but its weight ({w}) is <= 0.1 — "
+                    "violations on this axis never refuse",
+                ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
@@ -444,6 +487,9 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_7_spawn_cycle(m),
         *pass_8_governance_consistency(m),
         *pass_9_consciousness_claim_check(m),
+        *pass_10_precaution(m),
+        *pass_11_dual_process(m),
+        *pass_12_moral_foundations(m),
     ]
 
 
