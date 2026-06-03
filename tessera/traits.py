@@ -45,7 +45,13 @@ class TriggerContext:
     def _haystack(self) -> str:
         # Collapse all whitespace (incl. newlines) to single spaces so token
         # boundaries are clean for `_word_in` and multi-word lexicon entries.
-        return " ".join(f"{self.text} {self.plan_name}".split()).lower()
+        # Memoized per-context: every matcher calls this, so a single
+        # fire_traits() would otherwise re-normalize the full prompt ~14x.
+        h = self.__dict__.get("_hs_cache")
+        if h is None:
+            h = " ".join(f"{self.text} {self.plan_name}".split()).lower()
+            self.__dict__["_hs_cache"] = h
+        return h
 
 
 # --------------------------------------------------------------------------
