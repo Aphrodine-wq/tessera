@@ -305,6 +305,18 @@ SUBSTRATE_DOCS: dict[str, dict] = {
         "status": "shipped",
     },
 
+    "rl": {
+        "summary": "Reinforcement learning — ε-greedy action choice + Q-learning that survives across runs.",
+        "when_to_use": "When an agent should learn which option works from experience. `rl_choose()` "
+                       "returns an action label (ε-greedy over the declared `actions`, keyed on the "
+                       "`state_from` beliefs); `rl_reward(action, reward)` updates the tabular Q-value. "
+                       "Q-tables persist per agent under ~/.tessera/rl/ so learning compounds across runs. "
+                       "Opt-in builtins — choice never dispatches plans or touches control flow.",
+        "example_idiom": "rl { agent: Router actions: [fast, careful] state_from: [topic] alpha: 0.5 epsilon: 0.1 }",
+        "maps_to": "Tabular Q-learning (Sutton & Barto 2018).",
+        "status": "shipped",
+    },
+
     "gricean": {
         "summary": "Cooperative-communication maxims — score (and optionally refuse) outgoing messages.",
         "when_to_use": "When an agent's outputs should be informative, evidenced, relevant, and clear. "

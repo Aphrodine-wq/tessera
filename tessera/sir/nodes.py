@@ -628,6 +628,25 @@ class EvolveDecl:
 
 
 @dataclass
+class RLDecl:
+    """Reinforcement-learning substrate config (research B3; Sutton & Barto 2018).
+
+    Plan-level tabular Q-learning. `rl_choose()` returns an ε-greedily chosen
+    action label from `actions`; `rl_reward(action, reward)` updates the
+    Q-table. `state_from` names the belief keys that form the Q-table state
+    key. Q-tables persist per agent under ~/.tessera/rl/ (override
+    TESSERA_RL_DIR).
+    """
+    target_agent: str = ""
+    actions: list[str] = field(default_factory=list)
+    state_from: list[str] = field(default_factory=list)
+    alpha: float = 0.1
+    gamma: float = 0.9
+    epsilon: float = 0.1
+    epsilon_decay_steps: int = 0  # 0 → fixed epsilon
+
+
+@dataclass
 class Module:
     name: str
     regions: list[Region] = field(default_factory=list)
@@ -660,6 +679,7 @@ class Module:
     gricean: "GriceanDecl | None" = None
     hindsight: "HindsightDecl | None" = None
     argumentative: "ArgumentativeDecl | None" = None
+    rl: "RLDecl | None" = None
 
     def all_nodes(self):
         for r in self.regions:

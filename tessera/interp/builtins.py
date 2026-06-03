@@ -217,6 +217,81 @@ def _b_analogy(node, args, world, owner) -> dict:
     return dict(mapping.bindings)
 
 
+def _rl_state_key(world, decl):
+    """State key from the declared `state_from` beliefs of the RL agent."""
+    from ..rl import state_key
+    wm = world.state_for(decl.target_agent).working_memory
+    return state_key({k: wm.get(k) for k in decl.state_from})
+
+
+def _b_rl_choose(node, args, world, owner) -> str:
+    """rl_choose() → the ε-greedily chosen action label (a string).
+
+    Reads the declared tsr:rl config: state = state_key over the `state_from`
+    beliefs; ε-greedy over `actions`. Stores (state, choice) so a later
+    rl_reward() can learn against it. Opt-in builtin — it returns a label for
+    the plan to act on; it never dispatches plans or touches control flow.
+    """
+    decl = world.module.rl
+    if decl is None:
+        raise _err("rl_choose: no tsr:rl block declared")
+    if not decl.actions:
+        raise _err("rl_choose: tsr:rl declares no actions")
+    from ..rl import epsilon_at_step, load_qtable
+
+    skey = _rl_state_key(world, decl)
+    table = load_qtable(decl.target_agent)
+    if decl.epsilon_decay_steps > 0:
+        step = sum(table.visits.get(skey, {}).values())
+        eps = epsilon_at_step(step, eps_start=1.0, eps_end=decl.epsilon,
+                              decay_steps=decl.epsilon_decay_steps)
+    else:
+        eps = decl.epsilon
+    chosen = table.choose(skey, decl.actions, epsilon=eps)
+    wm = world.state_for(decl.target_agent).working_memory
+    wm["_rl_last_state"] = skey
+    wm["_rl_last_choice"] = chosen
+    world.record(decl.target_agent, "rl:choose", state=skey, chosen=chosen,
+                 epsilon=round(eps, 4))
+    return chosen
+
+
+def _b_rl_reward(node, args, world, owner) -> float:
+    """rl_reward(reward) or rl_reward(action, reward) → update Q, return new Q.
+
+    One arg: rewards the most recent rl_choose() pick. Two args: rewards an
+    explicit action at the current state. Persists the Q-table.
+    """
+    decl = world.module.rl
+    if decl is None:
+        raise _err("rl_reward: no tsr:rl block declared")
+    if not args:
+        raise _err("rl_reward(reward) or rl_reward(action, reward)")
+    from ..rl import load_qtable, save_qtable
+
+    wm = world.state_for(decl.target_agent).working_memory
+    if len(args) >= 2:
+        action, reward = args[0], args[1]
+        skey = _rl_state_key(world, decl)
+    else:
+        action = wm.get("_rl_last_choice")
+        reward = args[0]
+        skey = wm.get("_rl_last_state", _rl_state_key(world, decl))
+    if action is None:
+        raise _err("rl_reward: no action — call rl_choose() first or pass one")
+    try:
+        r = float(reward)
+    except (TypeError, ValueError):
+        raise _err(f"rl_reward: reward must be a number (got {reward!r})")
+    table = load_qtable(decl.target_agent)
+    new_q = table.update(skey, str(action), r, skey, decl.actions,
+                         alpha=decl.alpha, gamma=decl.gamma)
+    save_qtable(table)
+    world.record(decl.target_agent, "rl:update", state=skey, plan=str(action),
+                 reward=round(r, 4), q=round(new_q, 4))
+    return new_q
+
+
 BUILTINS = {
     "__list__": _b_list,
     "__record__": _b_record,
@@ -227,4 +302,6 @@ BUILTINS = {
     "calibrate": _b_calibrate,
     "abductive": _b_abductive,
     "analogy": _b_analogy,
+    "rl_choose": _b_rl_choose,
+    "rl_reward": _b_rl_reward,
 }

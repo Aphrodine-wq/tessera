@@ -526,6 +526,27 @@ def pass_15_argumentative(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_16_rl(m: Module) -> list[Diagnostic]:
+    """RL lint. E930: target agent must exist. E931: at least two actions —
+    a one-armed bandit has nothing to learn."""
+    diags: list[Diagnostic] = []
+    decl = m.rl
+    if decl is None:
+        return diags
+    if not decl.target_agent or decl.target_agent not in m.agents:
+        diags.append(Diagnostic(
+            "E930", "error", "rl", "-",
+            f"tsr:rl target agent {decl.target_agent!r} is not defined",
+        ))
+    if len(decl.actions) < 2:
+        diags.append(Diagnostic(
+            "E931", "error", "rl", "-",
+            "tsr:rl needs at least two actions — rl_choose has nothing to "
+            "learn to prefer otherwise",
+        ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
@@ -543,6 +564,7 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_13_gricean(m),
         *pass_14_hindsight(m),
         *pass_15_argumentative(m),
+        *pass_16_rl(m),
     ]
 
 

@@ -45,7 +45,7 @@ from .nodes import (
     CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl, WelfareDecl,
     TraitDecl, WorkspaceDecl,
     PrecautionDecl, PrecautionThresholdSpec, MoralFoundationsDecl, DualProcessDecl,
-    GriceanDecl, HindsightDecl, ArgumentativeDecl,
+    GriceanDecl, HindsightDecl, ArgumentativeDecl, RLDecl,
 )
 
 
@@ -1619,6 +1619,48 @@ def _lower_dual_process(block: SubstrateBlock, mod: Module) -> None:
     mod.dual_process = decl
 
 
+# ---- rl (research B3, Sutton & Barto 2018) ----
+_RL_HEAD_RE = re.compile(r"\brl\s*\{")
+_RL_AGENT_RE = re.compile(r"agent\s*:\s*(\w+)")
+_RL_ACTIONS_RE = re.compile(r"actions\s*:\s*\[([^\]]*)\]")
+_RL_STATE_RE = re.compile(r"state_from\s*:\s*\[([^\]]*)\]")
+_RL_ALPHA_RE = re.compile(r"alpha\s*:\s*([0-9.]+)")
+_RL_GAMMA_RE = re.compile(r"gamma\s*:\s*([0-9.]+)")
+_RL_EPSILON_RE = re.compile(r"epsilon\s*:\s*([0-9.]+)")
+_RL_DECAY_RE = re.compile(r"epsilon_decay_steps\s*:\s*(\d+)")
+
+
+def _lower_rl(block: SubstrateBlock, mod: Module) -> None:
+    src = block.body
+    m = _RL_HEAD_RE.search(src)
+    if not m:
+        raise SyntaxFail("expected `rl { ... }`")
+    brace = src.index("{", m.end() - 1)
+    body, _ = _balanced_extract(src, brace)
+    decl = RLDecl()
+    am = _RL_AGENT_RE.search(body)
+    if am:
+        decl.target_agent = am.group(1)
+    acts = _RL_ACTIONS_RE.search(body)
+    if acts:
+        decl.actions = [s.strip() for s in acts.group(1).split(",") if s.strip()]
+    st = _RL_STATE_RE.search(body)
+    if st:
+        decl.state_from = [s.strip() for s in st.group(1).split(",") if s.strip()]
+    for rx, attr in ((_RL_ALPHA_RE, "alpha"), (_RL_GAMMA_RE, "gamma"),
+                     (_RL_EPSILON_RE, "epsilon")):
+        mm = rx.search(body)
+        if mm:
+            v = float(mm.group(1))
+            if not (0.0 <= v <= 1.0):
+                raise SyntaxFail(f"rl: {attr} must be in [0, 1] (got {v})")
+            setattr(decl, attr, v)
+    dm = _RL_DECAY_RE.search(body)
+    if dm:
+        decl.epsilon_decay_steps = int(dm.group(1))
+    mod.rl = decl
+
+
 # ---- gricean (research 4.5, Grice 1975) ----
 _GRICEAN_HEAD_RE = re.compile(r"gricean\s*\{")
 _GR_MINW_RE = re.compile(r"min_words\s*:\s*(\d+)")
@@ -1885,6 +1927,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_moral_foundations(block, mod)
         elif block.substrate == "dual_process":
             _lower_dual_process(block, mod)
+        elif block.substrate == "rl":
+            _lower_rl(block, mod)
         elif block.substrate == "gricean":
             _lower_gricean(block, mod)
         elif block.substrate == "hindsight":
