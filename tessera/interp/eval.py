@@ -978,6 +978,14 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         fired_names = [t.name for t in fired]
         preamble += trait_preamble(fired)
 
+    # Dual-process: when this plan was routed to the slow path (low confidence
+    # or irreversible), make it mean something — deliberate, and don't reuse a
+    # fast cached answer for a decision the agent is unsure about.
+    slow = bool(state and state.substrate_state.get("dual_process_mode") == "slow")
+    if slow:
+        preamble += ("<deliberate>Think step by step and enumerate the "
+                     "alternatives before answering.</deliberate>\n")
+
     # Auto-recall: inject the agent's relevant memory (semantic facts +
     # recent episodic events) between the posture frame and the task body, so
     # it's part of the cache key. Values → posture → recalled context → task.
@@ -991,12 +999,14 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         rendered = preamble + recall_block + rendered
 
     # Semantic cache — short-circuit if a near-identical prompt has been seen.
-    cached = semantic_cache_lookup(rendered)
+    # Slow-path (deliberative) calls bypass the cache by design.
+    cached = None if slow else semantic_cache_lookup(rendered)
     if cached is not None:
         world.region_results.setdefault("_semantic_cache_hits", 0)
         world.region_results["_semantic_cache_hits"] += 1
         world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
-                     ethics_applied=ethics_applied, recalled=recalled, cost=0.0, cached=True)
+                     ethics_applied=ethics_applied, recalled=recalled,
+                     routed=("slow" if slow else "fast"), cost=0.0, cached=True)
         if agent_name is not None:
             gated = substrates.on_prompt_output(world, agent_name, prompt.name, cached["text"])
             if gated is not None:
@@ -1010,7 +1020,7 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     semantic_cache_put(rendered, result.text, backend=result.backend, model=result.model)
     world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
                  ethics_applied=ethics_applied, recalled=recalled,
-                 cost=result.cost_dollars, cached=False)
+                 routed=("slow" if slow else "fast"), cost=result.cost_dollars, cached=False)
     if agent_name is not None:
         gated = substrates.on_prompt_output(world, agent_name, prompt.name, result.text)
         if gated is not None:

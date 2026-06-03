@@ -25,6 +25,17 @@ def _err(msg: str):
 
 # ----- value constructors (literal syntax) -----
 
+def _set_auto_confidence(world, owner, conf) -> None:
+    """Record reasoning-derived confidence so dual_process routing picks it up
+    at the next plan entry. A plan can still set `_confidence` explicitly; the
+    freshest write wins. No-op if confidence isn't a finite number."""
+    try:
+        c = float(conf)
+    except (TypeError, ValueError):
+        return
+    world.state_for(owner).working_memory["_confidence"] = c
+
+
 def _b_list(node, args, world, owner) -> list:
     return list(args)
 
@@ -131,6 +142,8 @@ def _b_bayesian_posterior(node, args, world, owner) -> dict:
     world.record(owner, "bayesian:posterior", latent=latent,
                  observed=f"{observed}={value}",
                  posterior={k: round(v, 4) for k, v in post.items()})
+    if post:
+        _set_auto_confidence(world, owner, max(post.values()))
     return post
 
 
@@ -173,6 +186,8 @@ def _b_abductive(node, args, world, owner) -> str:
     best, ranked = best_explanation(hyps, observations)
     world.record(owner, "abductive:rank", best=best.name if best else None,
                  ranked=[(r.name, round(r.posterior, 4)) for r in ranked])
+    if best:
+        _set_auto_confidence(world, owner, best.posterior)
     return best.name if best else "none"
 
 
