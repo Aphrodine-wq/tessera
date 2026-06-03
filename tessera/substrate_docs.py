@@ -189,7 +189,7 @@ SUBSTRATE_DOCS: dict[str, dict] = {
                        "action is stamped with the intent it served in the audit trace.",
         "example_idiom": "intent estimate { goal: 'bounded cost estimate' success: total > 0 forbidden: [NoPII] }",
         "maps_to": "Goal/intention in BDI (Bratman); design-by-contract preconditions/postconditions; "
-                   "provenance and accountability (the same value as auditable code in AEON).",
+                   "provenance and accountability (the same value as auditable code).",
         "status": "shipped",
     },
 

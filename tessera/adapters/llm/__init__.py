@@ -380,6 +380,93 @@ class BedrockBackend(LLMBackend):
         )
 
 
+class LlamaCppBackend(LLMBackend):
+    """In-process llama.cpp via ``llama-cpp-python`` — the Tier-A (true GBNF)
+    backend. A grammar passed in ``opts['grammar']`` is enforced at the token
+    level, so a structurally invalid record is impossible to emit.
+
+    Env: TESSERA_LLAMACPP_MODEL (or TESSERA_WIRE_GGUF) -> path to a .gguf;
+    TESSERA_LLAMACPP_CTX (default 2048).
+    """
+    name = "llamacpp"
+
+    def __init__(self, model_path: str | None = None):
+        self.model_path = (model_path or os.environ.get("TESSERA_LLAMACPP_MODEL")
+                           or os.environ.get("TESSERA_WIRE_GGUF"))
+        if not self.model_path:
+            raise RuntimeError(
+                "set TESSERA_LLAMACPP_MODEL or TESSERA_WIRE_GGUF to a local .gguf"
+            )
+        from llama_cpp import Llama, LlamaGrammar  # type: ignore
+        self._Grammar = LlamaGrammar
+        self._grammar_cache: dict[str, object] = {}  # compile each GBNF once
+        self._llm = Llama(
+            model_path=self.model_path,
+            n_ctx=int(os.environ.get("TESSERA_LLAMACPP_CTX", "2048")),
+            verbose=False,
+        )
+
+    def complete(self, prompt: str, **opts) -> CompletionResult:
+        kwargs = {
+            "max_tokens": opts.get("max_tokens", 256),
+            "temperature": opts.get("temperature", 0.7),
+        }
+        gbnf = opts.get("grammar")
+        if gbnf:
+            g = self._grammar_cache.get(gbnf)
+            if g is None:
+                g = self._Grammar.from_string(gbnf)
+                self._grammar_cache[gbnf] = g
+            kwargs["grammar"] = g
+        out = self._llm(prompt, **kwargs)
+        choice = out["choices"][0]
+        usage = out.get("usage", {})
+        return CompletionResult(
+            text=choice.get("text", ""),
+            backend="llamacpp",
+            model=os.path.basename(self.model_path),
+            tokens_in=usage.get("prompt_tokens", 0),
+            tokens_out=usage.get("completion_tokens", 0),
+        )
+
+
+class LlamaServerBackend(LLMBackend):
+    """Talks to a running ``llama-server`` (llama.cpp's HTTP server) — the other
+    Tier-A path. POSTs ``grammar`` (raw GBNF) to /completion.
+
+    Env: TESSERA_LLAMA_SERVER (default http://localhost:8080).
+    """
+    name = "llama_server"
+
+    def __init__(self, host: str | None = None):
+        self.host = (host or os.environ.get("TESSERA_LLAMA_SERVER")
+                     or "http://localhost:8080").rstrip("/")
+
+    def complete(self, prompt: str, **opts) -> CompletionResult:
+        body = {
+            "prompt": prompt,
+            "n_predict": opts.get("max_tokens", 256),
+            "temperature": opts.get("temperature", 0.7),
+            "stream": False,
+        }
+        if opts.get("grammar"):
+            body["grammar"] = opts["grammar"]
+        req = urllib.request.Request(
+            f"{self.host}/completion",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=opts.get("timeout", 300)) as r:
+            payload = json.loads(r.read().decode("utf-8"))
+        return CompletionResult(
+            text=payload.get("content", ""),
+            backend="llama_server",
+            model=payload.get("model", "llama_server"),
+            tokens_in=payload.get("tokens_evaluated", 0),
+            tokens_out=payload.get("tokens_predicted", 0),
+        )
+
+
 # ---------- dispatcher ----------
 
 
@@ -402,6 +489,65 @@ _PROVIDER_PRESETS: dict[str, dict[str, str]] = {
 }
 
 
+class ClaudeCliBackend(LLMBackend):
+    """The `claude -p` subprocess backend — SUBSCRIPTION billing, not the metered API.
+
+    This is the one backend that keeps cognition-in-Tessera on the same billing as the
+    rest of WALT's brain (which already shells `claude -p` ~465×/period). It does NOT use
+    ANTHROPIC_API_KEY and does NOT incur per-token cost — `cost_dollars` is always 0.0 by
+    design, because the subscription has already paid for it. Mirrors brain-bridge.js's
+    spawn: stdin prompt, `--append-system-prompt` for the daemon rules, TERM=dumb.
+
+    Model: opts['model'] → TESSERA_CLAUDE_MODEL → 'sonnet'. Binary: CLAUDE_PATH → ~/.local/bin/claude.
+    Fail-soft: a non-zero exit / timeout surfaces as a CompletionResult with the stderr text
+    so the Tessera pipeline degrades rather than crashing.
+    """
+    name = "claude_cli"
+
+    def __init__(self, model: str | None = None):
+        self.model = model or os.environ.get("TESSERA_CLAUDE_MODEL") or "sonnet"
+        self.bin = os.environ.get("CLAUDE_PATH") or os.path.expanduser("~/.local/bin/claude")
+
+    def complete(self, prompt: str, **opts) -> CompletionResult:
+        import subprocess
+        model = opts.get("model", self.model)
+        args = [self.bin, "-p", "--model", model, "--max-turns", str(opts.get("max_turns", 6))]
+        # Pure-reasoning backend: the context arrives IN the prompt, not via repo exploration.
+        # Two things stop the model from burning turns reaching for tools (which left it
+        # returning "Reached max turns"): (1) disable the tools, and (2) tell it plainly it is
+        # a non-interactive reasoning step that must answer directly. A caller that genuinely
+        # wants agentic behavior passes tools=True.
+        if not opts.get("tools"):
+            args += ["--disallowedTools", "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"]
+        system = opts.get("system") or opts.get("system_prompt") or (
+            "" if opts.get("tools") else
+            "You are a non-interactive reasoning step in an automated pipeline. Do NOT use any "
+            "tools. Do NOT ask questions or request files. The full context is already in the "
+            "prompt. Respond directly with only the requested output, nothing else."
+        )
+        if system:
+            args += ["--append-system-prompt", system]
+        # Neutral cwd: avoid a repo CLAUDE.md pulling the model into agentic exploration.
+        cwd = opts.get("cwd") or os.path.expanduser("~")
+        env = {**os.environ, "TERM": "dumb"}
+        try:
+            proc = subprocess.run(
+                args, input=prompt, capture_output=True, text=True,
+                timeout=opts.get("timeout", 120), env=env, cwd=cwd,
+            )
+            text = (proc.stdout or "").strip()
+            if proc.returncode != 0 and not text:
+                text = f"[claude_cli error rc={proc.returncode}: {(proc.stderr or '').strip()[:200]}]"
+            return CompletionResult(text=text, backend="claude_cli", model=model, cost_dollars=0.0)
+        except subprocess.TimeoutExpired:
+            return CompletionResult(text="[claude_cli timeout]", backend="claude_cli", model=model, cost_dollars=0.0)
+        except Exception as e:  # binary missing, etc. — degrade, don't crash the pipeline.
+            return CompletionResult(text=f"[claude_cli unavailable: {e}]", backend="claude_cli", model=model, cost_dollars=0.0)
+
+    def health(self) -> bool:
+        return os.path.exists(self.bin)
+
+
 def get_backend(name: str | None = None) -> LLMBackend:
     """Return the configured backend, falling back to NoopBackend on failure."""
     name = (name or os.environ.get("TESSERA_LLM_BACKEND") or "ollama").lower()
@@ -411,6 +557,13 @@ def get_backend(name: str | None = None) -> LLMBackend:
     backend: LLMBackend
     if name == "noop":
         backend = NoopBackend()
+    elif name == "claude_cli":
+        cb = ClaudeCliBackend()
+        if cb.health():
+            backend = cb
+        else:
+            warnings.warn(f"claude binary not found at {cb.bin}; using noop")
+            backend = NoopBackend()
     elif name == "anthropic":
         try:
             backend = AnthropicBackend()
@@ -453,6 +606,14 @@ def get_backend(name: str | None = None) -> LLMBackend:
         except Exception as e:
             warnings.warn(f"OpenAI-compat backend init failed ({e}); using noop")
             backend = NoopBackend()
+    elif name == "llamacpp":
+        try:
+            backend = LlamaCppBackend()
+        except Exception as e:
+            warnings.warn(f"llama.cpp backend init failed ({e}); using noop")
+            backend = NoopBackend()
+    elif name == "llama_server":
+        backend = LlamaServerBackend()  # lazy — errors surface on first complete()
     elif name == "ollama":
         ob = OllamaBackend()
         if ob.health():

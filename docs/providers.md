@@ -85,7 +85,6 @@ tessera providers --check  # probes each one, reports reachable / not
 | Env var | Effect |
 |---|---|
 | `TESSERA_NO_SEMANTIC_CACHE=1` | Disable semantic prompt cache. |
-| `TESSERA_NO_VERIFY_CACHE=1`   | Disable AEON verify cache. |
 | `TESSERA_NO_PARSE_CACHE=1`    | Disable Markdown parse cache. |
 | `TESSERA_CACHE_DIR=<path>`    | Override cache directory (default `~/.cache/tessera/`). |
 

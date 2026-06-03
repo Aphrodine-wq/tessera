@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .adapters.aeon import verify_sir_text
 from .adapters.obsidian import scaffold_agent, scan_vault
 from .interp.eval import run_agent
 from .parser.module import parse_file
@@ -16,52 +15,74 @@ from .substrate_docs import render_text as render_substrates
 from .verify.passes import run_local
 
 
-def _compile_run(file: str, *, emit_sir: str | None = None, use_aeon: bool = False,
+def _compile_run(file: str, *, emit_sir: str | None = None,
                  run: str | None = None,
                  sets: list[str] | None = None, audit: str | None = None,
                  sequential: bool = False,
                  train: bool = False) -> int:
-    pm = parse_file(file)
-    module = lower(pm)
-    sir_text = emit_module(module)
+    # Parse --set into beliefs with a clean diagnostic (not a raw traceback) on
+    # malformed entries: "keyonly" (no =), "=val" (empty key).
+    beliefs: dict[str, str] = {}
+    for kv in (sets or []):
+        if "=" not in kv:
+            print(f"error: --set expects key=value, got {kv!r}")
+            return 2
+        k, v = kv.split("=", 1)
+        if not k:
+            print(f"error: --set has an empty key in {kv!r}")
+            return 2
+        beliefs[k] = v
 
-    if emit_sir:
-        Path(emit_sir).write_text(sir_text)
-        print(f"wrote SIR → {emit_sir}")
+    if not Path(file).exists():
+        print(f"error: file not found: {file}")
+        return 2
 
-    local = run_local(module)
-    remote = verify_sir_text(sir_text) if use_aeon else []
-    diagnostics = local + remote
-    for d in diagnostics:
-        print(d)
+    # The compile pipeline can raise typed errors (parse/lowering SyntaxFail,
+    # interp RuntimeError_); surface them as clean diagnostics + exit 2 rather
+    # than dumping a Python traceback at the user.
+    from .sir.build import SyntaxFail
+    from .interp.eval import RuntimeError_, World
+    try:
+        pm = parse_file(file)
+        module = lower(pm)
+        sir_text = emit_module(module)
 
-    errors = [d for d in diagnostics if d.severity == "error"]
-    if errors:
-        print(f"\n{len(errors)} error(s)")
-        return 1
+        if emit_sir:
+            Path(emit_sir).write_text(sir_text)
+            print(f"wrote SIR → {emit_sir}")
 
-    if train:
-        from .training import train_all_trainable
-        paths = train_all_trainable(module)
-        if not paths:
-            print("no trainable models found in this file")
-        else:
-            for p in paths:
-                print(f"trained checkpoint → {p}")
+        diagnostics = run_local(module)
+        for d in diagnostics:
+            print(d)
 
-    if run:
-        from .interp.eval import World
-        beliefs = dict(kv.split("=", 1) for kv in (sets or []))
-        world = World(module=module, concurrent=not sequential)
-        result = run_agent(module, run, initial_beliefs=beliefs, world=world,
-                           concurrent=not sequential)
-        print(f"\n{run}() = {result!r}")
-        if audit:
-            import json
-            with open(audit, "w") as fh:
-                for ev in world.audit:
-                    fh.write(json.dumps(ev.to_dict()) + "\n")
-            print(f"wrote audit trace ({len(world.audit)} events) → {audit}")
+        errors = [d for d in diagnostics if d.severity == "error"]
+        if errors:
+            print(f"\n{len(errors)} error(s)")
+            return 1
+
+        if train:
+            from .training import train_all_trainable
+            paths = train_all_trainable(module)
+            if not paths:
+                print("no trainable models found in this file")
+            else:
+                for p in paths:
+                    print(f"trained checkpoint → {p}")
+
+        if run:
+            world = World(module=module, concurrent=not sequential)
+            result = run_agent(module, run, initial_beliefs=beliefs, world=world,
+                               concurrent=not sequential)
+            print(f"\n{run}() = {result!r}")
+            if audit:
+                import json
+                with open(audit, "w") as fh:
+                    for ev in world.audit:
+                        fh.write(json.dumps(ev.to_dict()) + "\n")
+                print(f"wrote audit trace ({len(world.audit)} events) → {audit}")
+    except (SyntaxFail, RuntimeError_, ValueError) as e:
+        print(f"error: {type(e).__name__}: {e}")
+        return 2
     return 0
 
 
@@ -69,7 +90,6 @@ def _cmd_compile(args: argparse.Namespace) -> int:
     return _compile_run(
         args.file,
         emit_sir=args.emit_sir,
-        use_aeon=args.aeon,
         run=args.run,
         sets=args.set,
         audit=args.audit,
@@ -109,7 +129,6 @@ def _cmd_vault_run(args: argparse.Namespace) -> int:
     return _compile_run(
         args.file,
         emit_sir=None,
-        use_aeon=args.aeon,
         run=args.agent,
         sets=args.set,
     )
@@ -418,7 +437,6 @@ def main(argv: list[str] | None = None) -> int:
     cp = sub.add_parser("compile", help="Parse, verify, optionally emit/run a .t.md file")
     cp.add_argument("file")
     cp.add_argument("--emit-sir", metavar="OUT")
-    cp.add_argument("--aeon", action="store_true")
     cp.add_argument("--sequential", action="store_true",
                     help="Disable concurrent actor scheduling (default is concurrent)")
     cp.add_argument("--train", action="store_true",
@@ -441,7 +459,6 @@ def main(argv: list[str] | None = None) -> int:
     vrun.add_argument("file")
     vrun.add_argument("--agent", required=True)
     vrun.add_argument("--set", action="append")
-    vrun.add_argument("--aeon", action="store_true")
     vrun.set_defaults(fn=_cmd_vault_run)
 
     vnew = vsub.add_parser("new", help="Scaffold a new agent file in the vault")
@@ -561,7 +578,20 @@ def main(argv: list[str] | None = None) -> int:
     verp.set_defaults(fn=_cmd_version)
 
     args = p.parse_args(argv)
-    return args.fn(args)
+    # Top-level safety net: any command (eval/calibrate/evolve/vault/…) that hits
+    # a missing file or a parse/lowering/interp error gets a clean diagnostic +
+    # exit 2, not a raw Python traceback. _compile_run keeps its own finer-grained
+    # handling; this catches everything else.
+    from .sir.build import SyntaxFail
+    from .interp.eval import RuntimeError_
+    try:
+        return args.fn(args)
+    except FileNotFoundError as e:
+        print(f"error: file not found: {e.filename or e}")
+        return 2
+    except (SyntaxFail, RuntimeError_, FileExistsError, ValueError) as e:
+        print(f"error: {type(e).__name__}: {e}")
+        return 2
 
 
 if __name__ == "__main__":

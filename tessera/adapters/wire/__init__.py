@@ -1,6 +1,6 @@
-"""tessera-wire bridge — constrained decoding for Tessera prompts.
+"""tson bridge — constrained decoding for Tessera prompts.
 
-Tessera is the first consumer of the ``tessera_wire`` interchange format. This
+Tessera is the first consumer of the ``tson`` interchange format. This
 adapter is the seam between the two: it turns a Tessera tool/schema into the
 format's compiled artifacts (GBNF grammar + validator) and picks the right
 *enforcement tier* for whatever LLM backend is active.
@@ -13,16 +13,16 @@ Tiers (by backend capability):
   - ``none``       no constraint API (Anthropic, …) — emit freely, then
                    validate-and-repair once.
 
-The format itself lives in the standalone ``tessera-wire`` repo. If it is not
+The format itself lives in the standalone ``tson`` repo. If it is not
 installed, this adapter degrades gracefully and Tessera behaves exactly as
 before (no prompt is schema-bound unless ``world.prompt_schemas`` is populated).
 """
 from __future__ import annotations
 
 try:
-    import tessera_wire as _tw
-    from tessera_wire import Compiled, ValidationError, compile_schema
-    from tessera_wire.schema import Field, Schema
+    import tson as _tw
+    from tson import Compiled, ValidationError, compile_schema
+    from tson.schema import Field, Schema
 
     AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised only when the pkg is absent
@@ -55,7 +55,7 @@ _TYPE_MAP = {
 def _require() -> None:
     if not AVAILABLE:
         raise RuntimeError(
-            "tessera-wire is not installed; `pip install -e ../tessera-wire` "
+            "tson is not installed; `pip install -e ../tson` "
             "to use constrained decoding."
         )
 
@@ -96,6 +96,12 @@ def constrain_opts(compiled: "Compiled", backend) -> dict:
     return {}
 
 
+def parse_emitted_record(text: str):
+    """Parse a validated wire record line back into a tson Record (for dispatch)."""
+    _require()
+    return _tw.parse_record(_first_record_line(text))
+
+
 def _first_record_line(text: str) -> str:
     """Pull the first plausible record line from a model completion (models
     sometimes add a code fence or chatter)."""
@@ -124,7 +130,7 @@ def enforce_complete(backend, prompt_text: str, compiled: "Compiled", *, max_tok
         return result
     except ValidationError as e:
         if tier_for(backend) == "none":
-            from tessera_wire.repair import build_repair_prompt
+            from tson.repair import build_repair_prompt
 
             retry = backend.complete(
                 build_repair_prompt(prompt_text, result.text, e), max_tokens=max_tokens

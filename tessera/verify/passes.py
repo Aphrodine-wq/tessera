@@ -1,8 +1,8 @@
-"""Local verification passes — the subset we run without AEON.
+"""Local verification passes — Tessera's built-in static checks.
 
-When AEON is reachable, results from `adapters.aeon.verify_sir` are *merged in*
-on top of these; AEON wins on overlapping rules. This file keeps Tessera usable
-without AEON present (dev loop, CI, contributor onboarding).
+These run on every compile (dev loop, CI, contributor onboarding) with no
+external dependency. They catch the obvious governance and structural bugs
+directly from the SIR.
 """
 from __future__ import annotations
 
@@ -330,10 +330,9 @@ def pass_8_governance_consistency(m: Module) -> list[Diagnostic]:
     composed governance set has no satisfying behavior. Emit E1000
     GovernanceContradiction.
 
-    This is a fast approximation, not a SAT-complete proof. A real Z3
-    backend lands later via AEON. Catches the obvious bugs (forbid when
-    true, contradictory permit+forbid pairs) without taking compile time
-    proportional to action-space size.
+    This is a fast approximation, not a SAT-complete proof. Catches the
+    obvious bugs (forbid when true, contradictory permit+forbid pairs)
+    without taking compile time proportional to action-space size.
     """
     diags: list[Diagnostic] = []
     if not m.policies:
@@ -412,17 +411,18 @@ def pass_9_consciousness_claim_check(m: Module) -> list[Diagnostic]:
     if m.iit is None and m.welfare is None:
         return diags  # only gate modules that opt into consciousness-adjacent substrates
     from ..iit import claim_violates_consciousness_discipline
-    # Check the module's name / region names — a crude but defensible
-    # scan against the same lex. A real implementation would scan the
-    # parsed module's prose; the prose is already gated when it's a
-    # substrate body, so this pass catches escapes.
-    for region in m.regions:
-        reason = claim_violates_consciousness_discipline(region.name)
+    # Scan the document PROSE (now carried on the lowered module) and every
+    # region name against the forbidden-claim lexicon. Substrate bodies are
+    # already gated by their own lowering; this catches bare claims in the
+    # surrounding markdown that would otherwise escape.
+    surfaces = [("prose", m.prose)] + [(r.name, r.name) for r in m.regions]
+    for where, scanned in surfaces:
+        reason = claim_violates_consciousness_discipline(scanned)
         if reason:
             diags.append(Diagnostic(
                 code="E1100",
                 severity="error",
-                region=region.name,
+                region=where,
                 node="-",
                 message=(
                     f"E1100 ConsciousnessClaim: {reason}. "

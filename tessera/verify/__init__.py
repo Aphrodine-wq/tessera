@@ -1,1 +1,1 @@
-"""Verification passes — local checks + AEON bridge (RFC §7)."""
+"""Verification passes — Tessera's built-in static checks (RFC §7)."""

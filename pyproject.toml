@@ -8,7 +8,6 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.optional-dependencies]
-aeon = []
 anthropic = ["anthropic>=0.34"]
 langchain = ["langchain>=0.3", "langchain-community>=0.3"]
 torch = ["torch>=2.4"]

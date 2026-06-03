@@ -70,6 +70,8 @@ def expected_calibration_error(
         raise ValueError(
             f"probs and correct must align; got {len(probs)} vs {len(correct)}"
         )
+    if n_bins < 1:
+        raise ValueError(f"n_bins must be >= 1, got {n_bins}")
     if not probs:
         return 0.0
     n = len(probs)

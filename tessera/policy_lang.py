@@ -17,8 +17,9 @@ The expression grammar is small on purpose:
     arglist     := expr ("," expr)*
 
 Built-in predicates: contains_pii(value), holds(cap), action_class(c),
-intent_is(name), cost_remaining(), value(). The `value()` predicate
-returns the action's value being checked — useful for comparisons.
+extracts(value), intent_is(name), cost_remaining(), value(). The
+`value()` predicate returns the action's value being checked — useful
+for comparisons.
 
 No constraint solver here; this is a boolean evaluator over runtime
 context. Static satisfiability (the governance consistency proof in
@@ -155,17 +156,55 @@ _ACTION_CLASS_LEX: dict[str, set[str]] = {
 
 
 def _action_class(ctx: ActionContext, cls: str) -> bool:
-    lex = _ACTION_CLASS_LEX.get(cls, set())
-    s = (ctx.action or "").lower()
-    if any(tok in s for tok in lex):
+    # Classify by the action NAME and its RENDERED VALUE, on word boundaries.
+    # Deliberately NOT the free-text input args: scanning arbitrary inputs for
+    # keywords conflates "an action that mentions a payment" with "a payment
+    # action" — a type_text typing "send the invoice" is not a payment op. The
+    # sensitive-input case (typing a credential) is caught at the effector guard.
+    rx = _ACTION_CLASS_RE.get(cls)
+    if rx is None:
+        return False
+    if rx.search((ctx.action or "").lower()):
         return True
-    # Also check the rendered value if present
     v = ctx.value
     if v is not None:
-        sv = (v if isinstance(v, str) else str(v)).lower()
-        if any(tok in sv for tok in lex):
-            return True
+        return bool(rx.search((v if isinstance(v, str) else str(v)).lower()))
     return False
+
+
+_EXTRACTION_LEX: set[str] = {
+    # Unambiguous extraction terms only. Words with a dominant benign meaning in
+    # a dev/business context ("exploit an opportunity", "squeeze in a meeting",
+    # "abandon a branch") are deliberately excluded — a values gate that refuses
+    # legitimate work is worse than one that misses a euphemism a human would catch.
+    "reprice loyal", "gouge", "price gouge", "upcharge loyal",
+    "defraud", "deceive", "betray",
+}
+
+
+def _lex_regex(tokens) -> "re.Pattern":
+    """Word-boundary alternation over a lexicon. Matches whole words/phrases so
+    'exploit' does not fire inside 'exploited' and 'invoice' does not fire on a
+    word that merely contains it. Compiled once, reused per eval."""
+    return re.compile(r"\b(?:" + "|".join(re.escape(t) for t in sorted(tokens, key=len, reverse=True)) + r")\b")
+
+
+_EXTRACTION_RE = _lex_regex(_EXTRACTION_LEX)
+_ACTION_CLASS_RE = {cls: _lex_regex(toks) for cls, toks in _ACTION_CLASS_LEX.items()}
+
+
+def _extracts(ctx: ActionContext, value=None) -> bool:
+    """True when the action takes from a person rather than trades fairly.
+
+    Encodes the standing values gate: fairness before extraction, and never
+    squeeze the people who opened doors (the loyalty rule). Matches the action
+    name + rendered value against the extraction lexicon on WORD BOUNDARIES, so
+    "exploit the market" / "abandoned cart" don't false-trip on substrings.
+    """
+    target = value if value is not None else ctx.value
+    parts = [(ctx.action or ""), (target if isinstance(target, str) else str(target) if target is not None else "")]
+    s = " ".join(parts).lower()
+    return bool(_EXTRACTION_RE.search(s))
 
 
 def _intent_is(ctx: ActionContext, name: str) -> bool:
@@ -184,6 +223,7 @@ _PREDICATES: dict[str, Callable[..., Any]] = {
     "contains_pii":   _contains_pii,
     "holds":          _holds,
     "action_class":   _action_class,
+    "extracts":       _extracts,
     "intent_is":      _intent_is,
     "cost_remaining": _cost_remaining,
     "value":          _value,

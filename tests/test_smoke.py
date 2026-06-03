@@ -22,14 +22,6 @@ PARALLEL_TEAM = Path(__file__).parent.parent / "examples" / "parallel_team.t.md"
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 
 
-def _aeon_available() -> bool:
-    try:
-        import aeon.adapters.language_adapter  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
 def test_parse():
     pm = parse_file(HELLO)
     assert pm.frontmatter.get("agent") == "HelloAgent"
@@ -1166,27 +1158,6 @@ def test_parse_cache_invalidates_on_file_change(tmp_path):
     assert first is not second  # cache miss after mtime bump
 
 
-def test_verify_cache_round_trip(tmp_path, monkeypatch):
-    """verify_cache_put followed by verify_cache_get returns same diagnostics."""
-    monkeypatch.setenv("TESSERA_CACHE_DIR", str(tmp_path))
-    from tessera import cache as cmod
-    cmod.clear_verify_cache()
-    cmod.verify_cache_put("FAKE SIR TEXT", [{"code": "E000", "severity": "error",
-                                              "region": "x", "node": "y", "message": "z"}])
-    got = cmod.verify_cache_get("FAKE SIR TEXT")
-    assert got is not None
-    assert got[0]["code"] == "E000"
-    assert cmod.verify_cache_get("DIFFERENT SIR") is None
-
-
-def test_sir_canonicalization_stable_across_id_changes():
-    """Two SIRs differing only in random ids should canonicalize to the same text."""
-    from tessera.sir.canonical import canonicalize
-    a = "%abc1234 = tsr.const () { value = 1 }\n%def5678 = tsr.binop (%abc1234) { op = '+' }"
-    b = "%zzzz9999 = tsr.const () { value = 1 }\n%qqqq0000 = tsr.binop (%zzzz9999) { op = '+' }"
-    assert canonicalize(a) == canonicalize(b)
-
-
 def test_list_providers_includes_all_major_providers():
     from tessera.adapters.llm import list_providers
     ids = {r["id"] for r in list_providers()}
@@ -1358,29 +1329,6 @@ def test_spawn_auto_restricts_unheld_capabilities():
         dropped.update(r.get("dropped") or [])
     assert any("NetworkOut" in d for d in dropped), \
         f"expected NetworkOut to be dropped, got: {dropped}"
-
-
-@pytest.mark.skipif(not _aeon_available(), reason="AEON not installed in this venv")
-def test_aeon_verifies_emitted_sir(tmp_path):
-    """AEON must accept .sir, parse regions as functions, and return VERIFIED for the hello example."""
-    from tessera.adapters.aeon import verify_sir_text
-
-    pm = parse_file(HELLO)
-    module = lower(pm)
-    sir_text = emit_module(module)
-
-    diagnostics = verify_sir_text(sir_text)
-    errors = [d for d in diagnostics if d.severity == "error"]
-    assert errors == [], f"unexpected AEON errors: {errors}"
-
-
-@pytest.mark.skipif(not _aeon_available(), reason="AEON not installed in this venv")
-def test_aeon_recognizes_sir_extension():
-    """AEON's language registry must include Tessera with the .sir extension."""
-    from aeon.adapters.language_adapter import supported_languages
-    langs = {l["id"]: l for l in supported_languages()}
-    assert "tessera" in langs
-    assert ".sir" in langs["tessera"]["extensions"]
 
 
 def test_semantic_writes_to_test_db(tmp_path):

@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
     AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
-    EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, Module, Node,
+    EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, RelationDecl, Module, Node,
     ASTDecl, BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
     CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl, WelfareDecl,
     TraitDecl, WorkspaceDecl,
@@ -231,6 +231,56 @@ def _emit_primary(p: _Parser, region: Region, block: SubstrateBlock) -> str:
         ))
         return n.id
 
+    # `related <factExpr> via predicate [direction out|in|both]`
+    if tok == "related":
+        p.eat("related")
+        fact_id = _emit_primary(p, region, block)
+        p.eat("via")
+        predicate = p.eat()
+        direction = "out"
+        if p.peek() == "direction":
+            p.eat("direction")
+            direction = p.eat()
+        n = region.add(Node(
+            op=Op.SM_Related,
+            inputs=[fact_id],
+            attributes={"predicate": predicate, "direction": direction},
+            substrate="memory:semantic",
+            effects={Effect.mem_semantic_r.value},
+            output_type="List",
+            provenance=block.span,
+        ))
+        return n.id
+
+    # `remember SchemaName(field=value, ...)` as an expression — binds the fact id
+    if tok == "remember":
+        p.eat("remember")
+        schema_name = p.eat()
+        p.eat("(")
+        field_names: list[str] = []
+        arg_ids: list[str] = []
+        if p.peek() != ")":
+            while True:
+                k = p.eat()
+                p.eat("=")
+                arg_ids.append(_emit_expr(p, region, block))
+                field_names.append(k)
+                if p.peek() == ",":
+                    p.eat(",")
+                    continue
+                break
+        p.eat(")")
+        n = region.add(Node(
+            op=Op.SM_Insert,
+            inputs=arg_ids,
+            attributes={"schema": schema_name, "fields": field_names},
+            substrate="memory:semantic",
+            effects={Effect.mem_semantic_w.value},
+            output_type="Fact",
+            provenance=block.span,
+        ))
+        return n.id
+
     # `spawn AgentName with [Cap, Cap]`
     if tok == "spawn":
         p.eat("spawn")
@@ -293,6 +343,18 @@ def _emit_primary(p: _Parser, region: Region, block: SubstrateBlock) -> str:
             attributes={"value": tok[1:-1], "type": "String"},
             substrate="logic",
             output_type="String",
+            provenance=block.span,
+        ))
+        return n.id
+
+    # boolean literal
+    if tok in ("true", "false"):
+        p.eat()
+        n = region.add(Node(
+            op=Op.Const,
+            attributes={"value": tok == "true", "type": "Bool"},
+            substrate="logic",
+            output_type="Bool",
             provenance=block.span,
         ))
         return n.id
@@ -752,6 +814,26 @@ def _lower_plan_body(src: str, region: Region, block: SubstrateBlock) -> None:
             i += 1
             continue
 
+        if line.startswith("relate "):
+            # relate <subjExpr> -predicate-> <objExpr>
+            inner = line[len("relate "):].strip()
+            mm = re.match(r"^(.*?)\s*-(\w+)->\s*(.*?)\s*$", inner)
+            if not mm:
+                raise SyntaxFail(f"relate statement malformed: {line!r}")
+            subj_src, predicate, obj_src = mm.group(1), mm.group(2), mm.group(3)
+            ps = _Parser(_tokens(subj_src)); subj_id = _emit_expr(ps, region, block)
+            po = _Parser(_tokens(obj_src)); obj_id = _emit_expr(po, region, block)
+            region.add(Node(
+                op=Op.SM_Relate,
+                inputs=[subj_id, obj_id],
+                attributes={"predicate": predicate},
+                substrate="memory:semantic",
+                effects={Effect.mem_semantic_w.value},
+                provenance=block.span,
+            ))
+            i += 1
+            continue
+
         if line.startswith("log "):
             # log EventName(arg, arg, ...)
             inner = line[len("log "):].strip()
@@ -962,6 +1044,7 @@ _EVENT_DECL_RE = re.compile(r"event\s+(\w+)\s*\(([^)]*)\)")
 
 _KNOWLEDGE_HEAD_RE = re.compile(r"knowledge\s*\{")
 _SCHEMA_DECL_RE = re.compile(r"schema\s+(\w+)\s*\(([^)]*)\)")
+_RELATION_DECL_RE = re.compile(r"relation\s+(\w+)\s*\(\s*(\w+)\s*->\s*(\w+)\s*\)")
 
 _POLICY_HEAD_RE = re.compile(r"policy\s+(\w+)\s*\{")
 _POLICY_FORBID_CONTAINS_RE = re.compile(r'forbid\s+contains\s+"([^"]+)"')
@@ -996,6 +1079,11 @@ def _parse_typed_params(src: str) -> list[tuple[str, str]]:
 
 
 def _lower_prompt(block: SubstrateBlock, mod: Module) -> None:
+    # `emits=<tool>` on the block fence binds every prompt in this block to that
+    # tool's call grammar (tson constrained decoding). Put an emitting prompt in
+    # its own block when other prompts shouldn't be bound.
+    emits = block.attrs.get("emits") or None
+    execute = block.attrs.get("execute", "false").lower() == "true"
     for raw in block.body.strip().splitlines():
         line = raw.strip()
         if not line or line.startswith("//"):
@@ -1009,6 +1097,8 @@ def _lower_prompt(block: SubstrateBlock, mod: Module) -> None:
             params=_parse_typed_params(params_src),
             return_type=ret_t.strip(),
             template=template,
+            emits=emits,
+            execute=execute,
         )
 
 
@@ -1819,6 +1909,9 @@ def _lower_knowledge(block: SubstrateBlock, mod: Module) -> None:
             fields=_parse_typed_params(params_src),
             persistent=persistent,
         )
+    for rm in _RELATION_DECL_RE.finditer(body):
+        rname, subj, obj = rm.groups()
+        mod.relations[rname] = RelationDecl(name=rname, subject_schema=subj, object_schema=obj)
 
 
 _TRAINABLE_HEAD_RE = re.compile(r"trainable\s*\{")
@@ -1878,6 +1971,7 @@ def _lower_neural(block: SubstrateBlock, mod: Module) -> None:
 def lower(pm: ParsedModule) -> Module:
     from .optimize import optimize as _optimize_sir
     mod = Module(name=pm.frontmatter.get("agent", "unnamed"))
+    mod.prose = pm.prose or ""  # carried for pass_9 consciousness-claim scan
     for block in pm.blocks:
         if block.substrate == "logic":
             _lower_logic(block, mod)

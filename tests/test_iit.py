@@ -63,11 +63,14 @@ def test_all_bipartitions_count():
 
 
 def test_claim_violates_catches_forbidden_patterns():
+    # Patterns are claim-shaped (affirmed), not bare topic nouns.
     forbidden_examples = [
         "this agent is conscious",
-        "demonstrates subjective experience",
+        "the agent has subjective experience",
+        "it experiences qualia and feels pain",
         "phi > 0 means consciousness",
         "with high phi the agent has consciousness",
+        "the system is sentient",
     ]
     for ex in forbidden_examples:
         assert claim_violates_consciousness_discipline(ex) is not None, ex
@@ -81,6 +84,19 @@ def test_claim_violates_allows_measured_language():
         "",
     ]
     for ex in safe_examples:
+        assert claim_violates_consciousness_discipline(ex) is None, ex
+
+
+def test_claim_violates_allows_disciplined_disclaimers():
+    # Disclaimers must pass — they are exactly what PHILOSOPHY.md requires. This
+    # is the regression guard for the 2026-06 prose-scan false positive.
+    disclaimers = [
+        "Awareness makes no claim that WALT has subjective experience",
+        "it is **not** evidence about phenomenality, qualia, or inner experience",
+        "the system does not feel pain and is not sentient",
+        "phi* is a structural property, not a claim about consciousness",
+    ]
+    for ex in disclaimers:
         assert claim_violates_consciousness_discipline(ex) is None, ex
 
 

@@ -1,7 +1,7 @@
 # Tessera
 
 **Markdown-native programming language for AI agents.** Write agents in
-`.t.md` files; the compiler verifies them via AEON, persists their knowledge
+`.t.md` files; the compiler statically verifies them, persists their knowledge
 to a local SQLite fact store, discovers them in your Obsidian vault, and
 runs them through real LLM / LangChain / PyTorch backends.
 
@@ -61,7 +61,6 @@ tessera/
 ├── substrate_docs.py    English descriptions of every substrate category
 ├── cli.py         tessera compile / vault / substrates / audit / facts commands
 └── adapters/
-    ├── aeon/      → AEON (formal verification, 73 engines)
     ├── semantic/  → local SQLite fact store for memory:semantic
     ├── obsidian/  → vault scan + scaffold
     ├── llm/       → Ollama (default) + Anthropic + noop
@@ -142,8 +141,8 @@ tessera vault scan ~/Desktop/TheVault
 tessera vault new ~/Desktop/TheVault/Agents/NewBot.t.md \
     --agent NewBot --template llm
 
-# Compile + verify with AEON + run
-tessera compile examples/researcher.t.md --aeon \
+# Compile + verify + run
+tessera compile examples/researcher.t.md \
     --run TeamLead --set topic="fair pricing"
 
 # Query the persistent audit store — provenance for any past run
@@ -210,7 +209,7 @@ shadow that lives only for the run.
   `~/.tessera/semantic.db` for `memory:semantic` facts;
   `~/.tessera/audit_governance.db` (forever) + `~/.tessera/audit_operational.db`
   (30-day rolling) for the audit / provenance graph.
-- **External integrations:** AEON (verify), Obsidian (vault scan + scaffold),
+- **External integrations:** Obsidian (vault scan + scaffold),
   Ollama, Anthropic, LangChain, PyTorch.
 
 Pre-alpha. Use at your own risk. PRs welcome — the design lives in

@@ -56,6 +56,12 @@ def _fallback_search(query: str) -> str:
     )
 
 
+def _fallback_weather(location: str, units: str) -> str:
+    """Deterministic two-arg example callable (no network). Echoes both args so
+    examples/tests can prove the call dispatched with the right values."""
+    return f"{location}: 72 ({units})"
+
+
 def invoke_tool(tool_obj: Any, args: list[Any], invoke_method: str = "invoke") -> Any:
     """Call a resolved tool object with a list of positional args.
 

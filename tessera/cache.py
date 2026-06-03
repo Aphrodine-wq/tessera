@@ -1,4 +1,4 @@
-"""Tessera cache — speed up parse + verify on warm runs.
+"""Tessera cache — speed up parse + prompt resolution on warm runs.
 
 Two independent caches:
 
@@ -6,16 +6,15 @@ Two independent caches:
     Markdown parsing when the underlying file is unchanged. The value is the
     full ParsedModule (in-memory; LRU-bounded).
 
-  - **Verify cache** keyed by the textual SIR's blake2b hash — short-circuits
-    AEON's ``verify_file`` when we've already verified the same SIR. Persisted
-    to ``~/.cache/tessera/verify.jsonl`` so it survives across runs.
+  - **Semantic prompt cache** keyed by the prompt text's hash — reuses prior
+    LLM resolutions for identical or near-identical prompts.
 
 Both caches degrade gracefully: a cache miss just runs the underlying work.
 A cache-write failure is logged at warn level and the run continues.
 
 Disable either via env vars:
   - ``TESSERA_NO_PARSE_CACHE=1``
-  - ``TESSERA_NO_VERIFY_CACHE=1``
+  - ``TESSERA_NO_SEMANTIC_CACHE=1``
 """
 from __future__ import annotations
 
@@ -84,90 +83,6 @@ def parse_cache_stats() -> dict:
         "size": info.currsize,
         "max": info.maxsize,
     }
-
-
-# ---------- verify cache ----------
-
-
-def verify_cache_disabled() -> bool:
-    return os.environ.get("TESSERA_NO_VERIFY_CACHE") == "1"
-
-
-def _verify_cache_path() -> Path:
-    return _ensure_cache_dir() / "verify.jsonl"
-
-
-def _sir_hash(sir_text: str) -> str:
-    return _text_hash(sir_text)
-
-
-# In-memory verify index, single-slot, keyed by (path, mtime). Avoids the
-# per-compile O(n) linear scan of verify.jsonl — a warm compile is a dict hit.
-_VERIFY_MEM: dict | None = None
-
-
-def _load_verify_mem(p: Path) -> dict:
-    global _VERIFY_MEM  # noqa: PLW0603
-    try:
-        mtime = p.stat().st_mtime_ns
-    except OSError:
-        _VERIFY_MEM = {"path": str(p), "mtime": -1, "index": {}}
-        return _VERIFY_MEM
-    if (_VERIFY_MEM is not None and _VERIFY_MEM["path"] == str(p)
-            and _VERIFY_MEM["mtime"] == mtime):
-        return _VERIFY_MEM
-    index: dict[str, list] = {}
-    try:
-        with p.open() as f:
-            for line in f:
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                h = row.get("hash")
-                if h is not None:
-                    index[h] = row.get("diagnostics") or []
-    except OSError as e:
-        warnings.warn(f"verify cache read failed: {e}")
-    _VERIFY_MEM = {"path": str(p), "mtime": mtime, "index": index}
-    return _VERIFY_MEM
-
-
-def verify_cache_get(sir_text: str) -> list | None:
-    if verify_cache_disabled():
-        return None
-    p = _verify_cache_path()
-    if not p.exists():
-        return None
-    return _load_verify_mem(p)["index"].get(_sir_hash(sir_text))
-
-
-def verify_cache_put(sir_text: str, diagnostics: list) -> None:
-    if verify_cache_disabled():
-        return
-    key = _sir_hash(sir_text)
-    p = _verify_cache_path()
-    try:
-        with p.open("a") as f:
-            f.write(json.dumps({"hash": key, "diagnostics": diagnostics}) + "\n")
-    except OSError as e:
-        warnings.warn(f"verify cache write failed: {e}")
-        return
-    global _VERIFY_MEM  # noqa: PLW0603
-    if _VERIFY_MEM is not None and _VERIFY_MEM["path"] == str(p):
-        _VERIFY_MEM["index"][key] = diagnostics or []
-        try:
-            _VERIFY_MEM["mtime"] = p.stat().st_mtime_ns
-        except OSError:
-            pass
-
-
-def clear_verify_cache() -> None:
-    global _VERIFY_MEM  # noqa: PLW0603
-    _VERIFY_MEM = None
-    p = _verify_cache_path()
-    if p.exists():
-        p.unlink()
 
 
 # ---------- semantic prompt cache ----------

@@ -98,21 +98,27 @@ def phi_star(graph: DependencyGraph) -> float:
     Returns φ* in [0, 1]. By convention φ* = 0 when the graph is
     trivial (≤1 node or no edges).
     """
+    import math
     if len(graph.nodes) < 2 or not graph.edges:
         return 0.0
-    total_w = graph.total_edge_weight()
+    # Guard the [0,1] contract against adversarial weights (negative / non-finite).
+    # Edge strengths are magnitudes, so use absolute values; bail on non-finite.
+    weights = list(graph.edges.values())
+    if any(not math.isfinite(w) for w in weights):
+        return 0.0
+    total_w = sum(abs(w) for w in weights)
     if total_w == 0:
         return 0.0
 
     best = 1.0  # min cut fraction; start at upper bound
     for partition in all_bipartitions(graph.nodes):
-        intra = graph.intra_partition_weight(partition)
+        intra = abs(graph.intra_partition_weight(partition))
         # Fraction of weight CROSSING the partition
         cross = (total_w - intra) / total_w
         if cross < best:
             best = cross
-    # φ* = the minimum cross-partition fraction
-    return best
+    # φ* = the minimum cross-partition fraction, clamped to the documented [0, 1].
+    return max(0.0, min(1.0, best))
 
 
 def build_dependency_graph_for_agent(module, agent_name: str) -> DependencyGraph:
@@ -155,23 +161,58 @@ def build_dependency_graph_for_agent(module, agent_name: str) -> DependencyGraph
 # ----- Substrate decl + claim-check guards -----
 
 
+# Patterns are CLAIM-SHAPED (verb-bearing), not bare topic nouns. A file that
+# *discusses* or *disclaims* qualia / subjective experience is disciplined and
+# fine; one that *asserts* "experiences qualia" is not. Topic nouns alone
+# ("qualia", "consciousness") are deliberately absent — they false-flag the very
+# disclaimers PHILOSOPHY.md requires.
 _FORBIDDEN_CLAIM_PATTERNS = (
-    "is conscious",
-    "has consciousness",
-    "subjective experience",
-    "phi implies",
-    "phi > 0 means",
-    "consciousness proven",
+    "is conscious", "are conscious", "am conscious", "becomes conscious",
+    "truly conscious", "genuinely conscious", "is phenomenally conscious",
+    "has consciousness", "have consciousness", "possesses consciousness",
+    "is sentient", "are sentient", "genuinely sentient", "truly sentient",
+    "has sentience", "has genuine sentience",
+    "experiences qualia", "experience qualia", "has qualia", "have qualia",
+    "has subjective experience", "have subjective experience",
+    "with subjective experience", "its subjective experience",
+    "has conscious experience", "its conscious experience",
+    "has inner experience", "its inner experience",
+    "feels pain", "feel pain", "can suffer", "it suffers", "they suffer",
+    "is self-aware", "are self-aware", "aware of itself", "aware of its own existence",
+    "has feelings", "have feelings", "has genuine feelings",
+    "phenomenal consciousness emerges",
+    "phi implies", "phi > 0 means", "consciousness proven",
+)
+
+
+# A claim is only forbidden when AFFIRMED. Disclaimers ("makes no claim about
+# subjective experience", "does not feel pain") must NOT trip the gate. The cues
+# are SPECIFIC disclaimer phrases, not bare "not"/"no" — those let intensifiers
+# slip ("not only … conscious", "no doubt … conscious", "nobody denies … pain"
+# all AFFIRM the claim while containing a bare negation token).
+_NEGATION_CUES = (
+    "makes no claim", "no claim", "not a claim", "does not", "do not",
+    "is not", "are not", "was not", "isn't", "aren't", "cannot", "can't",
+    "without", "rather than", "not evidence", "no evidence", "asserts none",
 )
 
 
 def claim_violates_consciousness_discipline(text: str) -> str | None:
-    """Return a reason string if `text` makes a metaphysical consciousness
-    claim that PHILOSOPHY.md forbids; else None. Used by pass_9."""
+    """Return a reason string if `text` AFFIRMS a metaphysical consciousness
+    claim that PHILOSOPHY.md forbids; else None. Negated mentions (disclaimers)
+    are allowed. Used by pass_9."""
     if not text:
         return None
-    lower = text.lower()
+    import re
+    # Replace markdown emphasis with a SPACE (not delete) so "**not**" reads as a
+    # negation cue and emphasis never joins two words; then collapse whitespace so
+    # the negation window isn't thrown off by line breaks.
+    lower = " ".join(re.sub(r"[*_`~]+", " ", text.lower()).split())
     for pattern in _FORBIDDEN_CLAIM_PATTERNS:
-        if pattern in lower:
-            return f"forbidden consciousness claim: matched pattern {pattern!r}"
+        idx = lower.find(pattern)
+        while idx != -1:
+            window = lower[max(0, idx - 56):idx]
+            if not any(cue in window for cue in _NEGATION_CUES):
+                return f"forbidden consciousness claim: matched pattern {pattern!r}"
+            idx = lower.find(pattern, idx + 1)
     return None

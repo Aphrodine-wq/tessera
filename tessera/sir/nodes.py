@@ -39,6 +39,8 @@ class Op(str, Enum):
     # Memory: Semantic (§4.3 — semantic tier, local fact store)
     SM_Insert = "tsr.sm.insert"
     SM_Search = "tsr.sm.search"
+    SM_Relate = "tsr.sm.relate"      # typed edge: subject -predicate-> object
+    SM_Related = "tsr.sm.related"    # neighbors of a fact via a predicate
 
     # Policy (§4.7)
     Policy_Check = "tsr.policy.check"
@@ -87,7 +89,7 @@ MEMORY_OPS = {
     Op.WM_Read, Op.WM_Write,
     Op.Workspace_Broadcast, Op.Workspace_Read, Op.Workspace_Subscribe,
     Op.EM_Append, Op.EM_Query,
-    Op.SM_Insert, Op.SM_Search,
+    Op.SM_Insert, Op.SM_Search, Op.SM_Relate, Op.SM_Related,
     Op.PM_LoadSkill,
 }
 PROMPT_OPS = {Op.Prompt_Render, Op.Prompt_Call}
@@ -199,6 +201,12 @@ class PromptDecl:
     return_type: str
     template: str
     model_hint: str | None = None  # optional model override per prompt
+    emits: str | None = None       # tool name -> constrain output to that tool's
+                                    # call grammar (block attr `emits=<tool>`).
+                                    # See adapters/wire (tson constrained decoding).
+    execute: bool = False          # if True AND emits is set: dispatch the emitted
+                                    # !call and return the tool result (block attr
+                                    # `execute=true`). Default: return the record text.
 
 
 @dataclass
@@ -249,6 +257,16 @@ class KnowledgeSchemaDecl:
     name: str
     fields: list[tuple[str, str]]
     persistent: bool = True
+
+
+@dataclass
+class RelationDecl:
+    """A typed predicate in a `knowledge { relation cites(Claim -> Source) }` block.
+    Edges created with `relate a -cites-> b` are checked: a must be a `subject_schema`
+    fact and b an `object_schema` fact, so the graph stays typed."""
+    name: str
+    subject_schema: str
+    object_schema: str
 
 
 @dataclass
@@ -371,6 +389,9 @@ class AutonomyDecl:
     require_approval: list[str] = field(default_factory=list)
     escalate_when: str = ""
     boundary: str = ""
+    allow_text_calls: list[str] = field(default_factory=list)  # tool names permitted
+                                                    # to run from a text-sourced (called_via=text)
+                                                    # record. Default empty = all refused (PRD §12).
 
 
 @dataclass
@@ -658,6 +679,7 @@ class Module:
     neural_models: dict[str, NeuralModelDecl] = field(default_factory=dict)
     episodic_events: dict[str, EpisodicEventDecl] = field(default_factory=dict)
     knowledge_schemas: dict[str, KnowledgeSchemaDecl] = field(default_factory=dict)
+    relations: dict[str, RelationDecl] = field(default_factory=dict)
     policies: dict[str, PolicyDecl] = field(default_factory=dict)
     eval_cases: list[EvalCaseDecl] = field(default_factory=list)
     skills: dict[str, SkillDecl] = field(default_factory=dict)
@@ -680,6 +702,7 @@ class Module:
     hindsight: "HindsightDecl | None" = None
     argumentative: "ArgumentativeDecl | None" = None
     rl: "RLDecl | None" = None
+    prose: str = ""  # document prose (outside substrate blocks) — scanned by pass_9
 
     def all_nodes(self):
         for r in self.regions:

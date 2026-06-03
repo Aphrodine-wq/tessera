@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from enum import Enum
 from threading import Event, Lock
 from typing import Any, Callable
 
@@ -45,6 +46,36 @@ class Refusal:
     def __bool__(self) -> bool:
         # Refusals are falsy so an agent can branch on `let x = ...; if not x ...`
         return False
+
+
+class CalledVia(str, Enum):
+    """Provenance of a tool dispatch (PRD §12 instruction/data boundary)."""
+    DIRECT = "direct"  # a normal SIR Op.Apply tool call
+    WIRE = "wire"      # parsed from a schema-bound prompt's emitted !call (Theme B)
+    TEXT = "text"      # lifted from free-text / a =result body — no producer yet;
+                       # refused by default so a smuggled call can't execute
+
+
+def _check_tool_provenance(world, tool, called_via, agent_name) -> "Refusal | None":
+    """Refuse a tool call sourced from untrusted text unless explicitly allowed.
+    Composes with (does not replace) autonomy/policy, which gate intent/capability.
+    `direct` and `wire` pass; only `text` is gated. Default behavior is unchanged
+    because no current code path produces `text`."""
+    if called_via != CalledVia.TEXT:
+        return None
+    allowed: list[str] = []
+    if world.module.autonomy is not None:
+        allowed = getattr(world.module.autonomy, "allow_text_calls", [])
+    if tool.name in allowed:
+        return None
+    refusal = Refusal(
+        reason=(f"tool {tool.name!r} call sourced from untrusted text "
+                f"(called_via=text) refused; instruction/data boundary"),
+        policy="provenance",
+    )
+    world.record(agent_name, "policy_violation", policy="provenance",
+                 reason=refusal.reason, tool=tool.name, called_via="text")
+    return refusal
 
 
 def _check_policies(
@@ -267,6 +298,11 @@ class World:
     # Per-run shadow for non-persistent semantic schemas (those declared with
     # `persistent=false` on the memory:semantic fence). Keyed by schema name.
     ephemeral_semantic: dict[str, list[dict]] = field(default_factory=dict)
+    ephemeral_relations: list[dict] = field(default_factory=list)
+    # Constrained-decoding registry: prompt name -> tson.Compiled. When
+    # populated, _call_prompt enforces that schema's grammar on the prompt's
+    # output (see adapters/wire). Empty by default -> no behavior change.
+    prompt_schemas: dict[str, Any] = field(default_factory=dict)
 
     def record(self, agent_name: str | None, action: str, **detail) -> None:
         st = self.agents.get(agent_name) if agent_name else None
@@ -467,8 +503,9 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         # 3. External tool (LangChain or bare python callable)
         tool = world.module.tools.get(callee_name)
         if tool is not None:
-            res = _invoke_tool(tool, arg_vals, world)
-            world.record(agent_name, f"tool:{callee_name}")
+            res = _invoke_tool(tool, arg_vals, world,
+                               called_via=CalledVia.DIRECT, agent_name=agent_name)
+            world.record(agent_name, f"tool:{callee_name}", called_via="direct")
             return res
 
         # 4. Neural model — torch forward
@@ -687,17 +724,73 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         ]
 
     if op is Op.SM_Insert:
+        import uuid as _uuid
         schema = n.attributes.get("schema", "")
         field_names = n.attributes.get("fields") or []
         arg_vals = [values[i] for i in n.inputs]
-        record = {"schema": schema, "fields": dict(zip(field_names, arg_vals))}
         schema_decl = world.module.knowledge_schemas.get(schema)
+        field_types = schema_decl.fields if schema_decl else None
         if schema_decl and not schema_decl.persistent:
+            # ephemeral — validate, mint an id so the fact is relatable too
+            from ..adapters.semantic import validate_fields
+            fields = validate_fields(schema, dict(zip(field_names, arg_vals)),
+                                     field_types, ref_check=False)
+            record = {"id": str(_uuid.uuid4()), "schema": schema, "fields": fields}
             world.ephemeral_semantic.setdefault(schema, []).append(record)
-        else:
-            from ..adapters.semantic import remember_fact
-            remember_fact(schema, record["fields"])
-        return record
+            return record
+        from ..adapters.semantic import remember_fact
+        fact_id = remember_fact(schema, dict(zip(field_names, arg_vals)), field_types=field_types)
+        return {"id": fact_id, "schema": schema, "fields": dict(zip(field_names, arg_vals))}
+
+    if op is Op.SM_Relate:
+        predicate = n.attributes.get("predicate", "")
+        subj, obj = values[n.inputs[0]], values[n.inputs[1]]
+        subj_id = subj["id"] if isinstance(subj, dict) else subj
+        obj_id = obj["id"] if isinstance(obj, dict) else obj
+        # typed-endpoint check against the declared relation
+        rel = world.module.relations.get(predicate)
+        if rel is not None:
+            def _schema_of(fid, val):
+                if isinstance(val, dict):
+                    return val.get("schema")
+                from ..adapters.semantic import fact_schema
+                return fact_schema(fid)
+            ss, os_ = _schema_of(subj_id, subj), _schema_of(obj_id, obj)
+            if ss is not None and ss != rel.subject_schema:
+                raise RuntimeError(f"relate {predicate}: subject is {ss}, expected {rel.subject_schema}")
+            if os_ is not None and os_ != rel.object_schema:
+                raise RuntimeError(f"relate {predicate}: object is {os_}, expected {rel.object_schema}")
+        # ephemeral if either endpoint is an ephemeral fact, else persistent
+        eph = any(
+            any(r.get("id") == fid for rs in world.ephemeral_semantic.values() for r in rs)
+            for fid in (subj_id, obj_id)
+        )
+        if eph:
+            world.ephemeral_relations.append(
+                {"subject": subj_id, "predicate": predicate, "object": obj_id})
+            return predicate
+        from ..adapters.semantic import relate_facts
+        return relate_facts(subj_id, predicate, obj_id)
+
+    if op is Op.SM_Related:
+        predicate = n.attributes.get("predicate")
+        direction = n.attributes.get("direction", "out")
+        val = values[n.inputs[0]]
+        fid = val["id"] if isinstance(val, dict) else val
+        if world.ephemeral_relations:
+            by_id = {r["id"]: r for rs in world.ephemeral_semantic.values() for r in rs}
+            out = []
+            for e in world.ephemeral_relations:
+                if predicate and e["predicate"] != predicate:
+                    continue
+                if direction in ("out", "both") and e["subject"] == fid and e["object"] in by_id:
+                    out.append({**by_id[e["object"]], "_via": e["predicate"]})
+                if direction in ("in", "both") and e["object"] == fid and e["subject"] in by_id:
+                    out.append({**by_id[e["subject"]], "_via": e["predicate"]})
+            if out:
+                return out
+        from ..adapters.semantic import related_facts
+        return related_facts(fid, predicate=predicate, direction=direction)
 
     if op is Op.SM_Search:
         schema = n.attributes.get("schema", "")
@@ -922,6 +1015,25 @@ def _build_recall(world, agent_name, state, query, *,
     return block, n_sem, n_epi
 
 
+def _resolve_prompt_schema(world, prompt):
+    """Compile + cache the call grammar for a prompt declared with `emits=<tool>`.
+
+    Returns a tson ``Compiled`` (registered into ``world.prompt_schemas`` so it's
+    compiled once per run), or None if the tool is unknown or tson is absent —
+    in which case the prompt falls back to ordinary free-text completion.
+    """
+    tool = world.module.tools.get(prompt.emits)
+    if tool is None:
+        return None
+    try:
+        from ..adapters.wire import compile_tool
+        compiled = compile_tool(tool)
+    except Exception:
+        return None
+    world.prompt_schemas[prompt.name] = compiled
+    return compiled
+
+
 def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     from ..adapters.llm import get_backend
     from ..cache import semantic_cache_lookup, semantic_cache_put
@@ -998,9 +1110,19 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     if preamble or recall_block:
         rendered = preamble + recall_block + rendered
 
+    # Constrained decoding: if this prompt is schema-bound, its expected output
+    # is a wire record, not free text — so it caches separately (the grammar
+    # hash is folded into the key) and goes through the wire adapter. A binding
+    # comes from explicit registration (world.prompt_schemas) or, lazily, from a
+    # prompt declared with `emits=<tool>` (resolved + cached on first use).
+    compiled = world.prompt_schemas.get(prompt.name) if world.prompt_schemas else None
+    if compiled is None and getattr(prompt, "emits", None):
+        compiled = _resolve_prompt_schema(world, prompt)
+    cache_key = rendered if compiled is None else f"{rendered}\n\x00grammar:{compiled.grammar_hash}"
+
     # Semantic cache — short-circuit if a near-identical prompt has been seen.
     # Slow-path (deliberative) calls bypass the cache by design.
-    cached = None if slow else semantic_cache_lookup(rendered)
+    cached = None if slow else semantic_cache_lookup(cache_key)
     if cached is not None:
         world.region_results.setdefault("_semantic_cache_hits", 0)
         world.region_results["_semantic_cache_hits"] += 1
@@ -1014,10 +1136,14 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         return cached["text"]
 
     backend = get_backend()
-    result = backend.complete(rendered)
+    if compiled is not None:
+        from ..adapters.wire import enforce_complete
+        result = enforce_complete(backend, rendered, compiled)
+    else:
+        result = backend.complete(rendered)
     world.region_results.setdefault("_prompt_cost", 0.0)
     world.region_results["_prompt_cost"] += result.cost_dollars
-    semantic_cache_put(rendered, result.text, backend=result.backend, model=result.model)
+    semantic_cache_put(cache_key, result.text, backend=result.backend, model=result.model)
     world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
                  ethics_applied=ethics_applied, recalled=recalled,
                  routed=("slow" if slow else "fast"), cost=result.cost_dollars, cached=False)
@@ -1025,10 +1151,41 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         gated = substrates.on_prompt_output(world, agent_name, prompt.name, result.text)
         if gated is not None:
             return gated
+    # THEME B: close the loop. When the prompt opted in with execute=true AND is
+    # schema-bound, dispatch the emitted !call and return the tool result. Runs
+    # AFTER on_prompt_output so output governance still inspects the record first.
+    if compiled is not None and getattr(prompt, "execute", False):
+        return _dispatch_emitted_call(prompt, result.text, world, agent_name)
     return result.text
 
 
-def _invoke_tool(tool, arg_vals, world) -> Any:
+def _dispatch_emitted_call(prompt, record_text, world, agent_name) -> Any:
+    """Parse a validated wire record and dispatch its tool (called_via=wire)."""
+    from ..adapters.wire import parse_emitted_record
+    tool = world.module.tools.get(prompt.emits)
+    if tool is None:                      # emits pointed at an unknown tool
+        return record_text
+    record = parse_emitted_record(record_text)
+    # Positional args in ToolDecl.params declaration order (the contract the
+    # grammar was built from) — NOT record field order. Values are already
+    # type-coerced by the validator inside enforce_complete.
+    try:
+        arg_vals = [record.fields[pname] for pname, _ptype in tool.params]
+    except KeyError as e:
+        raise RuntimeError_(
+            f"emitted record for tool {tool.name!r} missing field {e}")
+    res = _invoke_tool(tool, arg_vals, world,
+                       called_via=CalledVia.WIRE, agent_name=agent_name)
+    world.record(agent_name, f"tool:{tool.name}",
+                 called_via="wire", address=record.address)
+    return res
+
+
+def _invoke_tool(tool, arg_vals, world, *, called_via=CalledVia.DIRECT,
+                 agent_name=None) -> Any:
+    refusal = _check_tool_provenance(world, tool, called_via, agent_name)
+    if refusal is not None:
+        return refusal
     from ..adapters.langchain import invoke_tool, resolve_callable
     callable_obj = resolve_callable(tool.import_path)
     return invoke_tool(callable_obj, arg_vals, invoke_method=tool.invoke_method)
@@ -1087,7 +1244,8 @@ def _invoke_skill(skill, arg_vals, world, agent_name):
         decl = world.module.tools.get(name)
         if decl is None:
             raise RuntimeError_(f"skill {skill.name!r} binds to tool {name!r}, not defined")
-        result = _invoke_tool(decl, arg_vals, world)
+        result = _invoke_tool(decl, arg_vals, world,
+                              called_via=CalledVia.DIRECT, agent_name=agent_name)
     elif kind == "fn":
         fn_region = world.module.functions.get(name)
         if fn_region is None:
