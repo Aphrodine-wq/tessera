@@ -179,6 +179,11 @@ class AgentState:
     global_traits: list[TraitDecl] = field(default_factory=list)   # fired global-scope
     # Runtime plan stack of PlanFrames (name + active per_plan traits + intent).
     plan_stack: list[PlanFrame] = field(default_factory=list)
+    # Per-substrate runtime accumulators (welfare gate state, ast attention
+    # schema, tom belief models, cycle counter). Keyed by substrate name; see
+    # interp/substrates.py. Kept off the hot path until a partial substrate is
+    # declared.
+    substrate_state: dict[str, Any] = field(default_factory=dict)
 
     @property
     def active_plan_traits(self) -> list[TraitDecl]:
@@ -544,6 +549,13 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
                                           intent=plan_region.intent))
         world.record(owner, f"plan_enter:{plan_name}", intent_served=plan_region.intent)
         try:
+            # Consciousness-adjacent / welfare partial substrates run their
+            # plan-entry behavior here: iit emits φ*, welfare records markers
+            # and may refuse, ast scores introspection fidelity and may refuse.
+            from . import substrates
+            refusal = substrates.on_plan_enter(world, owner, plan_name)
+            if refusal is not None:
+                return refusal
             return eval_region(plan_region, world, agent_name=owner)
         finally:
             state.plan_stack.pop()
@@ -853,6 +865,7 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     from ..adapters.llm import get_backend
     from ..cache import semantic_cache_lookup, semantic_cache_put
     from ..governance import approval_term, ethics_preamble
+    from . import substrates
 
     bindings = {pname: arg_vals[i] for i, (pname, _) in enumerate(prompt.params)}
     rendered = prompt.template
@@ -908,6 +921,10 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         world.region_results["_semantic_cache_hits"] += 1
         world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
                      ethics_applied=ethics_applied, cost=0.0, cached=True)
+        if agent_name is not None:
+            gated = substrates.on_prompt_output(world, agent_name, prompt.name, cached["text"])
+            if gated is not None:
+                return gated
         return cached["text"]
 
     backend = get_backend()
@@ -917,6 +934,10 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     semantic_cache_put(rendered, result.text, backend=result.backend, model=result.model)
     world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
                  ethics_applied=ethics_applied, cost=result.cost_dollars, cached=False)
+    if agent_name is not None:
+        gated = substrates.on_prompt_output(world, agent_name, prompt.name, result.text)
+        if gated is not None:
+            return gated
     return result.text
 
 

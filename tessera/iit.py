@@ -136,7 +136,7 @@ def build_dependency_graph_for_agent(module, agent_name: str) -> DependencyGraph
             plan_names.append(r.name)
             belief_names: list[str] = []
             for node in r.nodes:
-                if node.op in (Op.BeliefRead, Op.BeliefWrite):
+                if node.op in (Op.BeliefRead, Op.BeliefRevise):
                     nm = node.attributes.get("name")
                     if nm:
                         belief_names.append(nm)

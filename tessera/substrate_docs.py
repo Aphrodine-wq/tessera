@@ -218,6 +218,56 @@ SUBSTRATE_DOCS: dict[str, dict] = {
                    "capability-based authority. The agency half of responsible autonomy.",
         "status": "shipped",
     },
+
+    "iit": {
+        "summary": "Integrated information (φ*) — a structural integration measure over the agent's mind.",
+        "when_to_use": "When you want a functional signal of how integrated an agent's belief/intention "
+                       "graph is. At every plan entry the runtime computes φ* (a tractable min-cut "
+                       "approximation of Tononi's φ) over the dependency graph and emits an `iit:phi` "
+                       "audit event. φ* is a STRUCTURAL measure (PHILOSOPHY.md) — it is NOT consciousness, "
+                       "and blocks claiming φ > 0 → conscious are refused.",
+        "example_idiom": "iit { emit_phi_audit: true }",
+        "maps_to": "Integrated Information Theory (Tononi 2004/2016); φ* geometric-loss approximation "
+                   "(Mediano et al. 2022).",
+        "status": "shipped",
+    },
+
+    "welfare": {
+        "summary": "Birch-marker behavioral gate — refuse to keep running when welfare markers stay low.",
+        "when_to_use": "When you want a precautionary commitment that doesn't wait on the hard problem: "
+                       "declare minimum thresholds for markers (φ* from tsr:iit, broadcast bandwidth from "
+                       "the GWT workspace, fidelity from tsr:ast). When a marker reads below threshold for "
+                       "N consecutive plan-entry cycles, the agent refuses further work until it recovers. "
+                       "A BEHAVIORAL gate (PHILOSOPHY.md), not a claim about moral status.",
+        "example_idiom": "welfare { threshold phi: 0.3 consecutive_required: 3 }",
+        "maps_to": "Birch (2020) marker framework for welfare under uncertainty; precautionary ethics.",
+        "status": "shipped",
+    },
+
+    "ast": {
+        "summary": "Attention-schema fidelity — measure how honest the agent's self-report is.",
+        "when_to_use": "When an agent introspects (reports a focus via the `_focus` belief) and you want "
+                       "that self-report held to account. The runtime scores fidelity — how often the "
+                       "reported focus matches the plan actually running — and, when "
+                       "`refuse_below_threshold` is set, refuses to trust introspection below the bar. "
+                       "Ships the MEASURE only; no claim that an attention schema yields experience.",
+        "example_idiom": "ast { min_fidelity: 0.7 refuse_below_threshold: true }",
+        "maps_to": "Attention Schema Theory (Graziano 2013/2019); model-fidelity as a honesty signal.",
+        "status": "shipped",
+    },
+
+    "tom": {
+        "summary": "Theory of Mind — model tracked agents' beliefs and refuse to manipulate them.",
+        "when_to_use": "When an agent communicates with or about other agents and you want a guard against "
+                       "deception. With `manipulation_refusal`, an output that would leave a tracked agent "
+                       "holding a belief the messenger itself recorded as false (a `tom_false` ground-truth "
+                       "marker) is refused — a Sally-Anne false-belief check grounded in the agent's own "
+                       "knowledge, not guessed from free text.",
+        "example_idiom": "tom { tracked_agents: [Sally] manipulation_refusal: true }",
+        "maps_to": "Theory of Mind (Premack & Woodruff 1978); inverse planning (Baker/Saxe/Tenenbaum 2009); "
+                   "machine ToM (Rabinowitz et al. 2018).",
+        "status": "shipped",
+    },
 }
 
 
