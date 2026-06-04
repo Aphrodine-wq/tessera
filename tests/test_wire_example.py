@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tessera.adapters import wire
 from tessera.adapters.llm import CompletionResult
 from tessera.interp.eval import World, run_agent
 from tessera.parser.module import parse_file
@@ -16,6 +17,11 @@ from tessera.sir.build import lower
 from tessera.verify.passes import run_local
 
 EXAMPLE = str(Path(__file__).parent.parent / "examples" / "wire_tool.t.md")
+
+# Constrained decoding needs the standalone `tson` package; skip if absent.
+requires_tson = pytest.mark.skipif(
+    not wire.AVAILABLE, reason="tson not installed; constrained decoding unavailable"
+)
 
 
 def test_example_compiles_and_verifies_clean():
@@ -25,6 +31,7 @@ def test_example_compiles_and_verifies_clean():
     assert errs == []
 
 
+@requires_tson
 def test_emits_constrains_and_returns_record(monkeypatch):
     module = lower(parse_file(EXAMPLE))
 

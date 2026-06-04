@@ -1,6 +1,6 @@
 [project]
 name = "tessera"
-version = "0.0.1"
+version = "0.1.0"
 description = "Markdown-native, BDI-structured, triple-compiled language for agentic AI"
 requires-python = ">=3.11"
 authors = [{ name = "James Walton" }]
