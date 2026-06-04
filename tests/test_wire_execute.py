@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tessera.adapters import wire
 from tessera.adapters.llm import CompletionResult
 from tessera.interp.eval import (
     CalledVia,
@@ -22,6 +23,12 @@ from tessera.sir.build import lower
 from tessera.sir.nodes import AutonomyDecl, ToolDecl
 
 EXAMPLE = str(Path(__file__).parent.parent / "examples" / "wire_tool_execute.t.md")
+
+# The wire-sourced (constrained-decoding) path needs the standalone `tson`
+# package; skip those tests when it is not installed.
+requires_tson = pytest.mark.skipif(
+    not wire.AVAILABLE, reason="tson not installed; constrained decoding unavailable"
+)
 
 
 class _GbnfStub:
@@ -41,6 +48,7 @@ def test_example_compiles_with_execute_flag():
     assert p.emits == "get_weather" and p.execute is True
 
 
+@requires_tson
 def test_execute_dispatches_and_returns_tool_result(monkeypatch):
     module = lower(parse_file(EXAMPLE))
     stub = _GbnfStub("!get_weather #c1 location:Oxford units:f")
@@ -56,6 +64,7 @@ def test_execute_dispatches_and_returns_tool_result(monkeypatch):
                for e in world.audit)
 
 
+@requires_tson
 def test_field_mapping_follows_param_order(monkeypatch):
     """Args are pulled in ToolDecl.params order, not record field order."""
     module = lower(parse_file(EXAMPLE))

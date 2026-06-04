@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-04 — Verify goes local-only; docs reconciled to reality
+
+- **AEON integration removed.** Verification is now a first-party, local-only
+  pass system (`tessera/verify/`); there is no external verifier and no
+  `--aeon` flag. The earlier `AEON-owns-semantic-verification` decision (logged
+  2026-05-28, below) is superseded. `docs/architecture.md` rewritten to match.
+- **`tson` tests skip cleanly when the package is absent.** The `wire`
+  (constrained-decoding) adapter degrades gracefully without the standalone
+  `tson` package, but `tests/test_wire_*` raised instead of skipping. They now
+  guard on `wire.AVAILABLE` (`pytest.mark.skipif`), so a fresh clone is green:
+  **320 passing, 8 skipped** (the skips need `tson`).
+- **Doc drift fixed.** `pyproject` version `0.0.1` → `0.1.0` (matches README /
+  CHANGELOG); README test count and shipped-substrate count (now 30, incl.
+  `rl`) corrected; dangling `docs/Tessera_PRD_v0.5.md` / `TESSERA-RFC-001-SIR.md`
+  links repointed to `docs/architecture.md`, `PHILOSOPHY.md`, `CITATIONS.md`.
+
 ## 2026-06-03 — v0.1.0: Smarter + faster across the .t.md
 
 A hot-path overhaul of `_call_prompt` (the spine every agent run flows through)

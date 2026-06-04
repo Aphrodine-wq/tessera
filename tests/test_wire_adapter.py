@@ -9,8 +9,8 @@ from dataclasses import dataclass
 
 import pytest
 
-wire = pytest.importorskip("tessera.adapters.wire")
-from tessera.adapters.wire import (  # noqa: E402
+from tessera.adapters import wire
+from tessera.adapters.wire import (
     BACKEND_CAPS,
     compile_tool,
     constrain_opts,
@@ -18,9 +18,15 @@ from tessera.adapters.wire import (  # noqa: E402
     schema_from_tool,
     tier_for,
 )
-from tessera.adapters.llm import CompletionResult  # noqa: E402
-from tessera.sir.nodes import Module, PromptDecl, ToolDecl  # noqa: E402
-from tessera.interp.eval import World, _call_prompt  # noqa: E402
+from tessera.adapters.llm import CompletionResult
+from tessera.sir.nodes import Module, PromptDecl, ToolDecl
+from tessera.interp.eval import World, _call_prompt
+
+# The constrained-decoding path needs the standalone `tson` package. The wire
+# adapter degrades gracefully without it, so these tests skip rather than fail.
+requires_tson = pytest.mark.skipif(
+    not wire.AVAILABLE, reason="tson not installed; constrained decoding unavailable"
+)
 
 
 def _tool():
@@ -43,6 +49,7 @@ class _StubBackend:
         return CompletionResult(text=self.text, backend=self.name, model="stub")
 
 
+@requires_tson
 def test_schema_from_tool_maps_params():
     s = schema_from_tool(_tool())
     assert s.name == "get_weather"
@@ -60,6 +67,7 @@ def test_tier_selection():
     assert tier_for(_StubBackend("totally_unknown")) == "none"
 
 
+@requires_tson
 def test_constrain_opts_per_tier():
     c = compile_tool(_tool())
     assert constrain_opts(c, _StubBackend("llamacpp")) == {"grammar": c.gbnf}
@@ -73,6 +81,7 @@ def test_backend_caps_known_backends_covered():
         assert name in BACKEND_CAPS
 
 
+@requires_tson
 def test_enforce_complete_constrained_tier_validates():
     c = compile_tool(_tool())
     backend = _StubBackend("llamacpp", text='!get_weather #c1 location:Paris units:f')
@@ -81,6 +90,7 @@ def test_enforce_complete_constrained_tier_validates():
     assert backend.last_opts.get("grammar") == c.gbnf  # grammar was passed
 
 
+@requires_tson
 def test_enforce_complete_none_tier_repairs_once():
     c = compile_tool(_tool())
     # First reply is garbage; the repair re-ask returns a valid record.
@@ -100,6 +110,7 @@ def test_enforce_complete_none_tier_repairs_once():
     assert out.text == "!get_weather #c1 location:Paris units:c"
 
 
+@requires_tson
 def test_bound_prompt_uses_distinct_cache_key(monkeypatch):
     """A schema-bound prompt folds the grammar hash into its cache key, so it
     never collides with the same prompt text unconstrained."""

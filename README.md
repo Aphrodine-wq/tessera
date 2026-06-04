@@ -93,7 +93,7 @@ tessera substrates    # prints English breakdown of every substrate category
 | `neural` | torch nn.Module declared inline | `model classifier { linear in=4 out=8; relu; ... }` |
 | `rl` | ε-greedy choice + Q-learning that persists across runs | `rl { agent: Router actions: [fast, careful] state_from: [topic] }` |
 
-A few more are planned (`identity`, `predict`, `phenomenology`). Run
+A few more are planned (`evolve`, `identity`, `predict`, `phenomenology`). Run
 `tessera substrates` to see the full menu.
 
 ### Runtime intelligence (v0.1.0)
@@ -192,12 +192,13 @@ shadow that lives only for the run.
 
 ## Status
 
-- **Tests:** 277 passing
-- **Shipped substrates (29):** logic, agent, memory:working, memory:workspace,
+- **Tests:** 320 passing, 8 skipped (the skips need the optional `tson`
+  package for constrained decoding — see `tessera/adapters/wire/`).
+- **Shipped substrates (30):** logic, agent, memory:working, memory:workspace,
   memory:episodic, memory:semantic, memory:procedural, prompt, tool, neural,
   traits, intent, ethics, autonomy, policy, eval, iit, welfare, ast, tom,
   precaution, moral_foundations, dual_process, gricean, hindsight,
-  argumentative, causal, bayesian, metacognition. Run `tessera substrates`.
+  argumentative, causal, bayesian, metacognition, rl. Run `tessera substrates`.
 - **Reasoning-tool callables (from a plan, no new block):** `causal_backdoor`,
   `causal_identifiable`, `counterfactual` (over a declared `tsr:causal` DAG),
   `bayesian_posterior` (exact discrete inference), `calibrate`, `abductive`,
@@ -213,7 +214,9 @@ shadow that lives only for the run.
   Ollama, Anthropic, LangChain, PyTorch.
 
 Pre-alpha. Use at your own risk. PRs welcome — the design lives in
-`docs/Tessera_PRD_v0.5.md` and the SIR spec in `docs/TESSERA-RFC-001-SIR.md`.
+[`docs/architecture.md`](docs/architecture.md), the substrate philosophy in
+[`PHILOSOPHY.md`](PHILOSOPHY.md), and the theory each substrate maps to in
+[`CITATIONS.md`](CITATIONS.md).
 
 ---
 
