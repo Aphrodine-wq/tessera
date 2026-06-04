@@ -295,9 +295,26 @@ def _emit_primary(p: _Parser, region: Region, block: SubstrateBlock) -> str:
                     p.eat(",")
                     caps.append(p.eat())
             p.eat("]")
+        # Optional supervision budget: `supervise=retry(N)` or `supervise=N`.
+        # A child that refuses or raises is re-driven up to N times before its
+        # Refusal propagates (see _drive_child in the interpreter).
+        retries = 0
+        if p.peek() == "supervise":
+            p.eat("supervise")
+            p.eat("=")
+            nxt = p.eat()
+            if nxt == "retry":
+                p.eat("(")
+                retries = int(p.eat())
+                p.eat(")")
+            else:
+                try:
+                    retries = int(nxt)
+                except ValueError:
+                    raise SyntaxFail(f"supervise expects retry(N) or N (got {nxt!r})")
         n = region.add(Node(
             op=Op.Spawn,
-            attributes={"agent": agent_name, "capabilities": caps},
+            attributes={"agent": agent_name, "capabilities": caps, "retries": retries},
             substrate="agent",
             effects={Effect.spawn.value},
             capability_requires=set(caps),  # parent must hold caps it grants
@@ -306,9 +323,13 @@ def _emit_primary(p: _Parser, region: Region, block: SubstrateBlock) -> str:
         ))
         return n.id
 
-    # `recv from refExpr [timeout Ns]`
+    # `recv [all] from refExpr [timeout Ns]`
     if tok == "recv":
         p.eat("recv")
+        gather = False
+        if p.peek() == "all":      # `recv all from X` → gather every owed reply
+            p.eat("all")
+            gather = True
         p.eat("from")
         ref_id = _emit_primary(p, region, block)
         timeout_s: float | None = None
@@ -322,6 +343,8 @@ def _emit_primary(p: _Parser, region: Region, block: SubstrateBlock) -> str:
             except ValueError:
                 raise SyntaxFail(f"recv timeout expects a number (got {tok_val!r})")
         attrs: dict = {}
+        if gather:
+            attrs["gather"] = True
         if timeout_s is not None:
             attrs["timeout_s"] = timeout_s
         n = region.add(Node(
@@ -515,7 +538,15 @@ def _lower_logic(block: SubstrateBlock, mod: Module) -> None:
 
 _WORKSPACE_HEAD_RE = re.compile(r"workspace\s+(\w+)\s*\{")
 _AGENT_HEAD_RE = re.compile(r"agent\s+(\w+)(?:\s+intends\s+(\w+))?\s*\{")
-_PLAN_HEAD_RE = re.compile(r"plan\s+(\w+)(?:\s+serves\s+(\w+))?\s*\{")
+# `plan Name [priority=0.8] [serves Intent] {` — the priority and serves
+# clauses may appear in either order; group(2) is the raw modifier blob, parsed
+# out below. Plans default to DEFAULT_SALIENCE so unannotated files keep their
+# declaration order (a stable sort leaves equal-priority plans untouched).
+_PLAN_HEAD_RE = re.compile(
+    r"plan\s+(\w+)((?:\s+(?:priority\s*=\s*[0-9.]+|serves\s+\w+))*)\s*\{"
+)
+_PLAN_PRIORITY_RE = re.compile(r"priority\s*=\s*([0-9.]+)")
+_PLAN_SERVES_RE = re.compile(r"serves\s+(\w+)")
 _NOTICE_HEAD_RE = re.compile(r"notice\s+when\s+(.+?)\s*\{")
 _BELIEF_LINE_RE = re.compile(r"@(\w+)\s+(\w+)\s*:\s*(\w+)")
 _TRAITS_LINE_RE = re.compile(r"^\s*traits\s*:\s*\[([^\]]*)\]", re.MULTILINE)
@@ -614,8 +645,13 @@ def _lower_one_agent(agent_name: str, body: str, block: SubstrateBlock, mod: Mod
         _absorb_belief_lines(pre, agent_region, block)
 
         if kind == "plan":
+            from ..interp.scheduling import DEFAULT_SALIENCE
             plan_name = next_m.group(1)
-            plan_intent = next_m.group(2) or intent  # `serves X`, else inherit agent's
+            mods = next_m.group(2) or ""
+            pm_ = _PLAN_PRIORITY_RE.search(mods)
+            priority = float(pm_.group(1)) if pm_ else DEFAULT_SALIENCE
+            sm_ = _PLAN_SERVES_RE.search(mods)
+            plan_intent = (sm_.group(1) if sm_ else None) or intent  # else inherit agent's
             plan_brace = body.index("{", next_m.end() - 1)
             plan_body, end_idx = _balanced_extract(body, plan_brace)
             plan_region = Region(name=f"plan:{plan_name}", parent=agent_region.id,
@@ -624,7 +660,8 @@ def _lower_one_agent(agent_name: str, body: str, block: SubstrateBlock, mod: Mod
             mod.regions.append(plan_region)
             plan_nodes.append(Node(
                 op=Op.IntentionCommit,
-                attributes={"plan": plan_name, "region": plan_region.id},
+                attributes={"plan": plan_name, "region": plan_region.id,
+                            "priority": priority},
                 substrate="agent",
                 effects={Effect.intention_commit.value},
                 provenance=block.span,
@@ -661,9 +698,12 @@ def _lower_one_agent(agent_name: str, body: str, block: SubstrateBlock, mod: Mod
 
     # Order matters: notices registered first so they're active during plans;
     # plans last so the agent region's final value is the intention's return.
+    # Plans run highest-priority first — the same salience currency the
+    # blackboard arbitrates by. The sort is stable, so equal-priority plans
+    # keep their declaration order and unannotated agents are unchanged.
     for n in notice_nodes:
         agent_region.add(n)
-    for n in plan_nodes:
+    for n in sorted(plan_nodes, key=lambda nd: -nd.attributes.get("priority", 0.5)):
         agent_region.add(n)
 
     mod.regions.append(agent_region)

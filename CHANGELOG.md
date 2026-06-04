@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-06-04 — Orchestration spine: one currency, five connected moves
+
+Multi-agent orchestration now reads as a single idea — **salience/priority is
+one scalar in `[0,1]`, and higher wins everywhere**. Five previously-missing or
+inert capabilities were added and routed through one place
+(`tessera/interp/scheduling.py`). Tests **320 → 332 green**.
+
+- **Plan priority is live.** `plan Name priority=0.8 { ... }` now orders plan
+  execution highest-first (a stable sort, so unannotated agents are unchanged).
+  The priority that was declared on plans but never read at runtime now is, and
+  it's recorded on the `plan_enter` audit event.
+- **Blackboard accumulates.** `memory:workspace` contenders pool across a round
+  and are consumed on read, instead of every broadcast immediately arbitrating
+  and clearing. This is what lets multi-contender arbiters see the whole field.
+  Broadcasting still keeps a live winner so the GWT ignition peek is unchanged.
+- **New arbiters.** Beyond `highest_salience` / `last_write`: `weighted_vote`
+  (agreement compounds — many quiet votes beat one loud outlier) and
+  `quorum(N)` (resolves only once N contenders agree, else *abstains* and the
+  board keeps its prior winner). One registry entry per strategy in `scheduling.py`.
+- **Multi-message recv.** `send` binds each message to its own future, so a
+  parent can `send` several times then `recv` each reply — or `recv all from X`
+  to gather every owed reply into a list. Fan-out/gather composes instead of
+  stranding messages in a single slot.
+- **Supervision.** `spawn X supervise=retry(N)` re-drives a child that raises or
+  returns a `Refusal` up to N times before the refusal propagates; a raising
+  child becomes a `Refusal` instead of crashing the orchestrator. Retries and
+  exhaustion are audited (`supervised_retry`, `supervised_exhausted`).
+- **New example + tests.** `examples/orchestration.t.md` exercises all five
+  together (a review panel reaching quorum); `tests/test_orchestration.py` adds
+  12 tests.
+
 ## 2026-06-04 — Verify goes local-only; docs reconciled to reality
 
 - **AEON integration removed.** Verification is now a first-party, local-only
