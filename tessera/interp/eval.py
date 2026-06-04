@@ -2,10 +2,15 @@
 
 MVP scope: enough to execute hello.t.md AND researcher.t.md end-to-end.
 
-Concurrency model: synchronous round-robin actor scheduler. When TeamLead does
-`recv from researcher`, we deterministically run Researcher's next plan step
-to produce a reply. Not real concurrency — that lands when we have a proper
-async runtime — but the *semantics* of spawn/send/recv are correct.
+Concurrency model: a thread-per-message actor scheduler (default on). `send`
+binds each message to its own future; `recv` / `recv all` await them, serialized
+per child by a state lock so concurrent sends can't corrupt one agent's memory.
+Children are supervised — a raise or Refusal is re-driven up to the spawn's
+retry budget before it propagates.
+
+Orchestration spine: every scheduling choice — which plan runs first, which
+contender wins the blackboard, which child a supervisor re-drives — resolves
+through one scalar, salience/priority in [0,1] (see interp/scheduling.py).
 
 Capability gates: enforced at Spawn — a child can only receive caps the parent
 holds AND has declared via its frontmatter `capabilities_requested`. Beyond
@@ -14,7 +19,7 @@ that, capabilities are still mostly decorative until we wire `Tool.Invoke` etc.
 from __future__ import annotations
 
 from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Event, Lock
@@ -198,11 +203,17 @@ class AgentState:
     notices: list[tuple[Any, Any]] = field(default_factory=list)
     # Track which notice fired last so we don't re-fire on the same true state
     notice_last_fired_seq: dict[int, int] = field(default_factory=dict)
-    # Concurrent scheduler bookkeeping
-    pending_future: Future | None = None       # in-flight run of this agent
+    # Concurrent scheduler bookkeeping. One in-flight future per delivered
+    # message (FIFO), so a parent can `send` several messages then `recv` (or
+    # `recv all`) each reply — fan-out/gather composes instead of stranding
+    # messages in a single slot.
+    pending_futures: deque = field(default_factory=deque)
     last_result: Any = None                    # most recent plan return value
     mailbox_signal: Event = field(default_factory=Event)
     state_lock: Lock = field(default_factory=Lock)
+    # Supervision budget granted at spawn: how many times a child that refuses
+    # or raises is re-driven before its Refusal is allowed to propagate.
+    supervise_retries: int = 0
     # Cognitive traits, resolved once per agent (see _ensure_traits_resolved).
     traits_resolved: bool = False
     per_call_traits: list[TraitDecl] = field(default_factory=list)
@@ -246,25 +257,64 @@ class WorkspaceState:
     _ignition_seq: int = 0
 
     def broadcast(self, value: Any, salience: float) -> None:
+        """Add a contender to the board.
+
+        Contenders *accumulate* across a round — they are not consumed until the
+        board is read. This is what lets multi-contender arbiters (``quorum``,
+        ``weighted_vote``) see the whole field before deciding. Broadcasting
+        still updates a live ``last_winner`` so peeking the board mid-round (as
+        the GWT ignition path does) reflects the most salient draft so far.
+        """
         self.contenders.append((value, salience))
         self.draft_history.append((value, salience))
-        # Apply GWT bottleneck if declared
+        # Apply GWT bottleneck if declared (Baars's attention bottleneck): keep
+        # only the most salient contenders so the board can't grow without bound.
         if self.decl.gwt_bottleneck > 0 and len(self.contenders) > self.decl.gwt_bottleneck:
             self.contenders.sort(key=lambda x: -x[1])
             self.contenders = self.contenders[: self.decl.gwt_bottleneck]
-        self._arbitrate()
+        # Peek: resolve a live winner but keep contenders for the rest of the round.
+        self._arbitrate(commit=False)
 
-    def _arbitrate(self) -> None:
+    def read(self) -> Any:
+        """Resolve the round and return the winner, then clear the board.
+
+        Reading is the round boundary: the arbiter reduces every accumulated
+        contender to one winner, the board is consumed, and the next broadcast
+        starts a fresh round. Re-reading an empty board returns the retained
+        last winner (an idempotent peek).
+        """
+        if self.contenders:
+            self._arbitrate(commit=True)
+        return self.last_winner
+
+    def _arbitrate(self, commit: bool) -> None:
         if not self.contenders:
             return
+        from . import scheduling
         bandwidth = len(self.contenders)
-        if self.decl.arbiter == "highest_salience":
-            winner_value, winner_salience = max(self.contenders, key=lambda x: x[1])
-        else:
-            # default: last-write-wins
-            winner_value, winner_salience = self.contenders[-1]
+        result = scheduling.arbitrate(self.decl.arbiter, list(self.contenders))
+        if commit:
+            self.contenders.clear()
+        if result is None:
+            # The arbiter abstained (e.g. quorum not met): leave the prior
+            # winner standing and record the abstention if ignition is tracked.
+            if self.decl.track_ignition and self._world_ref is not None:
+                self._ignition_seq += 1
+                self._world_ref.record(
+                    None,
+                    f"gwt:ignition:{self.decl.name}",
+                    workspace=self.decl.name,
+                    bandwidth=bandwidth,
+                    winner_salience=None,
+                    arbiter=self.decl.arbiter,
+                    abstained=True,
+                    committed=commit,
+                    bottleneck=self.decl.gwt_bottleneck,
+                    cycle=self._ignition_seq + 1,
+                )
+            return
+        winner_value, winner_salience = result
         self.last_winner = winner_value
-        self.contenders.clear()
         if self.decl.track_ignition and self._world_ref is not None:
             self._ignition_seq += 1
             self._world_ref.record(
@@ -273,6 +323,8 @@ class WorkspaceState:
                 workspace=self.decl.name,
                 bandwidth=bandwidth,
                 winner_salience=winner_salience,
+                arbiter=self.decl.arbiter,
+                committed=commit,
                 bottleneck=self.decl.gwt_bottleneck,
                 cycle=self._ignition_seq,
             )
@@ -591,7 +643,8 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
             active = fire_traits(state.per_plan_trait_defs, ctx)
         state.plan_stack.append(PlanFrame(name=plan_name, traits=active,
                                           intent=plan_region.intent))
-        world.record(owner, f"plan_enter:{plan_name}", intent_served=plan_region.intent)
+        world.record(owner, f"plan_enter:{plan_name}", intent_served=plan_region.intent,
+                     priority=n.attributes.get("priority", 0.5))
         try:
             # Consciousness-adjacent / welfare partial substrates run their
             # plan-entry behavior here: iit emits φ*, welfare records markers
@@ -624,8 +677,14 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         # Create the child state with granted caps.
         child = world.state_for(target_name)
         child.capabilities |= granted
+        # Supervision budget: how many times a refusing/raising child is
+        # re-driven before its Refusal propagates (`spawn X supervise=retry(N)`).
+        retries = int(n.attributes.get("retries") or 0)
+        if retries > child.supervise_retries:
+            child.supervise_retries = retries
         world.spawn_log.append(f"{agent_name or '<root>'} -> {target_name} with {sorted(granted)}")
-        world.record(agent_name, f"spawn:{target_name}", caps_granted=sorted(granted))
+        world.record(agent_name, f"spawn:{target_name}", caps_granted=sorted(granted),
+                     supervise_retries=child.supervise_retries)
         if dropped:
             world.record(
                 agent_name,
@@ -643,15 +702,18 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         if target_name is None:
             raise RuntimeError_(f"send target is not an agent ref: {ref!r}")
         child = world.state_for(target_name)
-        with child.state_lock:
-            child.mailbox.append(msg)
-            child.mailbox_signal.set()
-        # Concurrent mode: kick off the child's run eagerly so it overlaps
-        # with any other work the caller does between this Send and the Recv.
-        if world.concurrent and world.executor is not None and child.pending_future is None:
-            child.pending_future = world.executor.submit(
-                _run_child_and_collect, world, target_name
-            )
+        # Concurrent mode: bind THIS message to its own future so each send gets
+        # exactly one reply on a later recv — fan-out composes. The future is
+        # serialized per child by its state_lock (see _drive_child), so several
+        # in-flight runs can't corrupt the child's working memory.
+        if world.concurrent and world.executor is not None:
+            retries = child.supervise_retries
+            fut = world.executor.submit(_drive_child, world, target_name, msg, retries)
+            child.pending_futures.append(fut)
+        else:
+            with child.state_lock:
+                child.mailbox.append(msg)
+                child.mailbox_signal.set()
         return None
 
     if op is Op.Recv:
@@ -660,6 +722,7 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         if target_name is None:
             raise RuntimeError_(f"recv target is not an agent ref: {ref!r}")
         child = world.state_for(target_name)
+        gather = bool(n.attributes.get("gather"))
         # Resolve timeout: per-recv attribute > env var > default 30s.
         import os as _os
         from concurrent.futures import TimeoutError as _FutTimeout
@@ -671,26 +734,31 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
             )
         except (TypeError, ValueError):
             timeout_s = 30.0
-        # Concurrent path: if a future is in flight from the Send-eager submit,
-        # block on it with the timeout; on timeout emit a deadlock_suspected
-        # audit event and return a Refusal.
-        if world.concurrent and child.pending_future is not None:
-            fut = child.pending_future
+
+        def _await(fut):
             try:
-                result = fut.result(timeout=timeout_s)
-                child.pending_future = None
-                return result
+                return fut.result(timeout=timeout_s)
             except _FutTimeout:
-                world.record(
-                    agent_name,
-                    "deadlock_suspected",
-                    waiting_on=target_name,
-                    timeout_s=timeout_s,
-                )
+                world.record(agent_name, "deadlock_suspected",
+                             waiting_on=target_name, timeout_s=timeout_s)
                 return Refusal(
                     reason=f"recv from {target_name} timed out after {timeout_s}s",
                     policy="<recv_timeout>",
                 )
+
+        # `recv all from X` — gather every reply still owed by X into a list.
+        if gather:
+            replies: list[Any] = []
+            while child.pending_futures:
+                replies.append(_await(child.pending_futures.popleft()))
+            while child.mailbox:
+                replies.append(_run_child_and_collect(world, target_name))
+            return replies
+
+        # `recv from X` — the next single reply. Prefer an in-flight future
+        # (concurrent send); otherwise drive the child synchronously.
+        if world.concurrent and child.pending_futures:
+            return _await(child.pending_futures.popleft())
         return _run_child_and_collect(world, target_name)
 
     if op is Op.Workspace_Broadcast:
@@ -702,7 +770,7 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
 
     if op is Op.Workspace_Read:
         ws_name = n.attributes.get("workspace")
-        return world.ensure_workspace(ws_name).last_winner
+        return world.ensure_workspace(ws_name).read()
 
     if op is Op.EM_Append:
         event_name = n.attributes.get("event")
@@ -866,30 +934,60 @@ def _agent_name_from_ref(ref: Any) -> str | None:
     return None
 
 
-def _run_child_and_collect(world: World, target_name: str) -> Any:
-    """Run the target agent's intention so it can produce a reply for recv.
+# Sentinel: "no message to bind" (distinct from a legitimate None message).
+_NO_MESSAGE = object()
 
-    Synchronous, deterministic model:
-      1. Drain one message from the child's mailbox.
-      2. Bind it to the child's first declared belief (the convention for v0.0.2).
-      3. Execute the child agent region (IntentionCommit fires).
-      4. Return whichever plan was the last to return — that's the recv value.
+
+def _drive_child(world: World, target_name: str, msg: Any = _NO_MESSAGE,
+                 retries: int = 0) -> Any:
+    """Run a child agent once to produce a reply, with binding + supervision.
+
+    Deterministic model:
+      1. Bind the message (if any) to the child's first declared belief
+         (the convention since v0.0.2).
+      2. Execute the child agent region (IntentionCommit fires).
+      3. Return whichever plan was the last to return — that's the recv value.
+
+    Serialized per child by ``state_lock`` so concurrent sends to the same agent
+    can't interleave on its working memory. **Supervision**: if the child raises
+    or returns a Refusal, it is re-driven up to ``retries`` times before the
+    Refusal is allowed to propagate — one bad child can't crash the orchestrator.
     """
     child = world.state_for(target_name)
-    if child.mailbox:
-        msg = child.mailbox.popleft()
-        if child.declared_beliefs:
-            child.working_memory[child.declared_beliefs[0]] = msg
-        else:
-            child.working_memory["_msg"] = msg
     region = world.module.agents.get(target_name)
     if region is None:
         raise RuntimeError_(f"agent {target_name!r} not declared in module")
-    _ensure_traits_resolved(world, target_name)
-    eval_region(region, world, agent_name=target_name)
-    child.has_run = True
-    # The intention's plan stored its return value in region_results.
-    # Find the most recently executed plan owned by this agent.
+    with child.state_lock:
+        _ensure_traits_resolved(world, target_name)
+        if msg is not _NO_MESSAGE:
+            if child.declared_beliefs:
+                child.working_memory[child.declared_beliefs[0]] = msg
+            else:
+                child.working_memory["_msg"] = msg
+        attempt = 0
+        while True:
+            try:
+                eval_region(region, world, agent_name=target_name)
+                result = _last_intention_value(world, target_name, region)
+            except Exception as exc:  # supervision: a raising child becomes a Refusal
+                result = Refusal(
+                    reason=f"{target_name} raised {type(exc).__name__}: {exc}",
+                    policy="<child_exception>",
+                )
+            child.has_run = True
+            child.last_result = result
+            if not isinstance(result, Refusal) or attempt >= retries:
+                if isinstance(result, Refusal) and retries > 0 and attempt >= retries:
+                    world.record(target_name, "supervised_exhausted",
+                                 attempts=attempt + 1, reason=result.reason)
+                return result
+            attempt += 1
+            world.record(target_name, "supervised_retry", attempt=attempt,
+                         budget=retries, reason=result.reason)
+
+
+def _last_intention_value(world: World, target_name: str, region: Region) -> Any:
+    """The most recently executed plan's return value — the agent's reply."""
     last_value: Any = None
     for n in region.nodes:
         if n.op is Op.IntentionCommit:
@@ -897,6 +995,15 @@ def _run_child_and_collect(world: World, target_name: str) -> Any:
             if plan_id in world.region_results:
                 last_value = world.region_results[plan_id]
     return last_value
+
+
+def _run_child_and_collect(world: World, target_name: str) -> Any:
+    """Synchronous recv path: drain one mailbox message, then drive the child."""
+    child = world.state_for(target_name)
+    msg = _NO_MESSAGE
+    if child.mailbox:
+        msg = child.mailbox.popleft()
+    return _drive_child(world, target_name, msg, child.supervise_retries)
 
 
 # ----- cognitive traits -----------------------------------------------------

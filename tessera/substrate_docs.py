@@ -47,9 +47,12 @@ SUBSTRATE_DOCS: dict[str, dict] = {
     "memory:workspace": {
         "summary": "Global blackboard — many writers, an arbiter picks one winner.",
         "when_to_use": "When multiple intentions or agents need to agree on "
-                       "'what we're doing now.' The winner becomes the next "
-                       "draft of the agent's behavior.",
-        "example_idiom": "workspace TeamMind { capacity: 1 arbiter: highest_salience }",
+                       "'what we're doing now.' Contenders pool across a round "
+                       "and are resolved on read; the winner becomes the next "
+                       "draft of the agent's behavior. Arbiters: highest_salience, "
+                       "last_write, weighted_vote (agreement compounds), "
+                       "quorum(N) (resolves only once N agree, else abstains).",
+        "example_idiom": "workspace TeamMind { capacity: 1 arbiter: quorum(2) }",
         "maps_to": "Global Workspace Theory (Baars/Dehaene)",
         "status": "shipped",
     },

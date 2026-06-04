@@ -85,7 +85,7 @@ tessera substrates    # prints English breakdown of every substrate category
 | `logic` | pure functions | `fn rank(papers, query) -> Float = ...` |
 | `agent` | BDI actors with beliefs + plans | `agent FooBot { beliefs: ... }` |
 | `memory:working` | per-invocation scratchpad | `let x = compute(input)` |
-| `memory:workspace` | global blackboard, arbiter picks winner | `workspace TeamMind { arbiter: highest_salience }` |
+| `memory:workspace` | global blackboard; contenders pool, an arbiter picks the winner on read | `workspace TeamMind { arbiter: quorum(2) }` |
 | `memory:episodic` | append-only event log | `log Decision(topic, choice)` |
 | `memory:semantic` | knowledge graph (local fact store) | `remember FactSheet(title=..., domain=...)` |
 | `prompt` | LLM template + bindings | `prompt summarize(t) -> String = "..."` |
@@ -111,6 +111,27 @@ Agents get smarter and faster without any extra wiring:
   and loads once per process instead of re-scanning the JSONL every call
   (≈280× faster warm lookups; see `tests/test_bench.py`).
 
+### Orchestration — one currency, everywhere
+
+Multi-agent coordination runs on a single scalar — **salience/priority in
+`[0,1]`, higher wins** — so the whole layer reads as one idea
+(`tessera/interp/scheduling.py`). The same number answers all three scheduling
+questions, and every decision lands in the audit trail:
+
+- **Which plan runs first?** `plan decide priority=0.9 { … }` — plans execute
+  highest-priority first (stable, so unannotated agents are unchanged).
+- **Which draft wins the blackboard?** Broadcasts *pool* across a round and an
+  arbiter resolves them on read: `highest_salience`, `weighted_vote`
+  (agreement compounds), or `quorum(N)` (resolves only once N agents agree,
+  else abstains).
+- **What happens when a child fails?** `spawn Critic supervise=retry(2)` —
+  a child that raises or refuses is re-driven before its `Refusal` propagates,
+  so one bad actor can't crash the run.
+
+Plus **fan-out/gather**: `send` a child several messages, then `recv all from X`
+to collect every reply at once. See [`examples/orchestration.t.md`](examples/orchestration.t.md)
+for all of it in one agent.
+
 ---
 
 ## Examples
@@ -122,6 +143,7 @@ slice of the language.
 |---|---|
 | `hello.t.md` | minimum: logic + agent, working memory |
 | `researcher.t.md` | multi-agent (Researcher, Critic, TeamLead), workspace broadcast, spawn/send/recv |
+| `orchestration.t.md` | the orchestration spine — plan `priority`, `quorum` arbiter, `recv all`, `supervise=retry` |
 | `researcher_full.t.md` | until-loops, notice handlers, comparison operators |
 | `research_assistant.t.md` | prompt + tool + LangChain bridge |
 | `perception.t.md` | PyTorch `neural` substrate |
@@ -192,7 +214,7 @@ shadow that lives only for the run.
 
 ## Status
 
-- **Tests:** 320 passing, 8 skipped (the skips need the optional `tson`
+- **Tests:** 332 passing, 8 skipped (the skips need the optional `tson`
   package for constrained decoding — see `tessera/adapters/wire/`).
 - **Shipped substrates (30):** logic, agent, memory:working, memory:workspace,
   memory:episodic, memory:semantic, memory:procedural, prompt, tool, neural,
