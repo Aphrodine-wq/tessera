@@ -23,6 +23,66 @@ from __future__ import annotations
 from typing import Any
 
 
+def evaluate_contracts(
+    world, owner: str | None, target_label: str, phase: str,
+    *, value: Any, intent: str | None, caps, args=(),
+):
+    """Evaluate author-declared `tsr:contract` clauses for one effect boundary.
+
+    `phase` is "before" or "after". Returns the first failing contract as
+    `(ok=False, contract_name, failed_clause_src, on_violation)`; if every
+    matching contract's `phase` clauses hold, returns `(True, None, None, None)`.
+
+    Pure evaluation — no refusal/retry is performed here. The caller owns that
+    policy (only the call site knows how to regenerate for `retry`), so this
+    stays a side-effect-free predicate over the ActionContext.
+    """
+    contracts = getattr(world.module, "contracts", None)
+    if not contracts:
+        return (True, None, None, None)
+    from ..policy_lang import ActionContext
+    ctx = ActionContext(
+        value=value, action=target_label, args=list(args),
+        agent=owner, intent=intent,
+        capabilities=frozenset(caps) if caps else frozenset(),
+    )
+    for c in contracts.values():
+        if c.target_label != target_label:
+            continue
+        clauses = c.before if phase == "before" else c.after
+        for expr, src in clauses:
+            try:
+                holds = bool(expr.eval(ctx))
+            except Exception as e:  # a clause that errors is a failed guarantee
+                world.record(owner, "contract:error", contract=c.name,
+                             phase=phase, clause=src, error=str(e))
+                return (False, c.name, src, c.on_violation)
+            if not holds:
+                return (False, c.name, src, c.on_violation)
+    return (True, None, None, None)
+
+
+def enforce_contract_refusal(world, owner, eval_result, target_label, phase):
+    """Resolve a contract evaluation at a Refusal-style site (plan / tool).
+
+    Returns a `Refusal` to block the action, or None to proceed. An `audit`
+    violation records and proceeds; `refuse` (and `retry` at a site that can't
+    regenerate) records and returns a Refusal.
+    """
+    ok, cname, clause, ov = eval_result
+    if ok:
+        return None
+    from .eval import Refusal
+    if ov and ov[0] == "audit":
+        world.record(owner, "contract:audit", contract=cname, phase=phase,
+                     clause=clause, target=target_label)
+        return None
+    world.record(owner, "contract:refuse", contract=cname, phase=phase,
+                 clause=clause, target=target_label)
+    return Refusal(reason=f"contract {cname}: {phase} clause failed — {clause}",
+                   policy=f"contract:{cname}")
+
+
 def _latest_ignition_bandwidth(world) -> float | None:
     """The bandwidth from the most recent GWT workspace ignition, if any.
 
@@ -143,6 +203,15 @@ def on_plan_enter(world, owner: str, plan_name: str):
         world.record(owner, "dual_process:route", mode=decision.mode,
                      rationale=decision.rationale, confidence=round(conf, 4),
                      forced_slow=decision.forced_slow, cycle=cycle)
+
+    # --- contract: author-declared `before` clauses bound to this plan ---
+    plan_intent = state.active_plan.intent if state.active_plan else None
+    res = evaluate_contracts(world, owner, f"plan:{plan_name}", "before",
+                             value=plan_name, intent=plan_intent,
+                             caps=state.capabilities)
+    refusal = enforce_contract_refusal(world, owner, res, f"plan:{plan_name}", "before")
+    if refusal is not None:
+        return refusal
 
     return None
 
@@ -310,16 +379,29 @@ def _run_critic(world, critic_name: str, claim_text: str) -> str | None:
     return get_backend().complete(tmpl).text
 
 
-def on_plan_exit(world, owner: str, plan_name: str, plan_region, result) -> None:
-    """hindsight after-action review, invoked when a plan completes.
+def on_plan_exit(world, owner: str, plan_name: str, plan_region, result):
+    """hindsight after-action review + contract `after` enforcement on plan exit.
 
     Compares declared ethics (from tsr:ethics) against the ethics actually
     applied on this plan's prompts (from the audit trail), records the outcome,
     and accumulates the review for tsr:evolve fitness via fitness_from_reviews.
+
+    Returns a `Refusal` if a contract's `after` clause fails (the caller swaps
+    it in for the plan's result); otherwise None. Plan results aren't re-driven,
+    so `retry` here degrades to refuse.
     """
     module = world.module
+
+    # --- contract: author-declared `after` clauses bound to this plan ---
+    res = evaluate_contracts(world, owner, f"plan:{plan_name}", "after",
+                             value=result, intent=plan_region.intent,
+                             caps=world.state_for(owner).capabilities)
+    refusal = enforce_contract_refusal(world, owner, res, f"plan:{plan_name}", "after")
+    if refusal is not None:
+        return refusal
+
     if module.hindsight is None or not module.hindsight.enabled:
-        return
+        return None
     from ..hindsight import review
     declared = [p.name for p in module.ethics.principles] if module.ethics else []
     applied: list[str] = []

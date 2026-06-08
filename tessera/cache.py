@@ -210,6 +210,12 @@ def semantic_cache_lookup(prompt: str, *, threshold: float = 0.95) -> dict | Non
 
 
 def semantic_cache_put(prompt: str, text: str, backend: str = "", model: str = "") -> None:
+    # KNOWN LIMITATION (concurrency): neither the in-memory `_SEM_MEM` update
+    # nor the JSONL append below is lock-guarded. With concurrent agents calling
+    # the same prompt, puts can race (a lost append / interleaved line). This
+    # affects which path a later call takes (fresh vs cached), not whether a
+    # contract fires — contract enforcement runs on whatever text is produced.
+    # A future fix is a module-level Lock here. See CHANGELOG.
     if semantic_cache_disabled():
         return
     embedding = _embed(prompt)

@@ -12,7 +12,7 @@ anthropic = ["anthropic>=0.34"]
 langchain = ["langchain>=0.3", "langchain-community>=0.3"]
 torch = ["torch>=2.4"]
 all = ["anthropic>=0.34", "langchain>=0.3", "langchain-community>=0.3", "torch>=2.4"]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "hypothesis>=6.0"]
 
 [project.scripts]
 tessera = "tessera.cli:main"

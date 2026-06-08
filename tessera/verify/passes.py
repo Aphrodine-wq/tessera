@@ -547,6 +547,54 @@ def pass_16_rl(m: Module) -> list[Diagnostic]:
     return diags
 
 
+def pass_17_contracts(m: Module) -> list[Diagnostic]:
+    """Contract lint. E830: the target effect (prompt/tool/plan) must exist —
+    a contract on a phantom effect can never fire. E831: `retry` on a `before`
+    clause is meaningless (inputs can't be regenerated) and degrades to refuse.
+    E832: a contract with no clauses is inert. E833: a clause references an
+    unknown predicate (e.g. `holds(NetworkOut)` instead of `holds("NetworkOut")`)
+    — it would fail-closed at runtime, so the contract silently refuses
+    everything."""
+    from ..policy_lang import predicate_names, known_predicates
+    diags: list[Diagnostic] = []
+    contracts = getattr(m, "contracts", None) or {}
+    plan_names = {r.name[len("plan:"):] for r in m.regions if r.name.startswith("plan:")}
+    known = known_predicates()
+    for c in contracts.values():
+        for expr, src in (*c.before, *c.after):
+            for pname in predicate_names(expr) - known:
+                diags.append(Diagnostic(
+                    "E833", "warning", f"contract:{c.name}", "-",
+                    f"clause {src!r} references unknown predicate {pname!r} — it "
+                    f"will fail-closed at runtime (refuse everything). If you meant "
+                    f"a capability, quote it: holds(\"{pname}\")",
+                ))
+        if c.target_kind == "prompt":
+            exists = c.target_name in m.prompts
+        elif c.target_kind == "tool":
+            exists = c.target_name in m.tools
+        else:  # plan
+            exists = c.target_name in plan_names
+        if not exists:
+            diags.append(Diagnostic(
+                "E830", "error", f"contract:{c.name}", "-",
+                f"contract target {c.target_label!r} is not a declared "
+                f"{c.target_kind} — it can never fire",
+            ))
+        if not c.before and not c.after:
+            diags.append(Diagnostic(
+                "E832", "warning", f"contract:{c.name}", "-",
+                "contract has no before/after clauses — it is inert",
+            ))
+        if c.before and not c.after and c.on_violation[0] == "retry":
+            diags.append(Diagnostic(
+                "E831", "warning", f"contract:{c.name}", "-",
+                "retry on_violation has no effect on a `before`-only contract "
+                "(inputs can't be regenerated) — it degrades to refuse",
+            ))
+    return diags
+
+
 def run_local(m: Module) -> list[Diagnostic]:
     return [
         *pass_1_substrate_adjacency(m),
@@ -565,6 +613,7 @@ def run_local(m: Module) -> list[Diagnostic]:
         *pass_14_hindsight(m),
         *pass_15_argumentative(m),
         *pass_16_rl(m),
+        *pass_17_contracts(m),
     ]
 
 

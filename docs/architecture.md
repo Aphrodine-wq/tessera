@@ -98,7 +98,7 @@ graceful degradation when one isn't available.
 
 | System | Limitation alone |
 |---|---|
-| **Tessera** | Agents can't talk to LLMs / tools / models without adapters; verification is static (no runtime model behavior) |
+| **Tessera** | Agents can't talk to LLMs / tools / models without adapters; static verification can't predict an LLM's output (runtime `tsr:contract` clauses close that gap by checking actual behavior at the effect boundary) |
 | **Obsidian** | Just markdown — no compiler, no runtime, no verification |
 | **LLM / LangChain / PyTorch** | Provider-specific; no shared effect model; no capability gating; no audit trail |
 
@@ -293,11 +293,13 @@ a workshop for cognition.
 | `gricean`, `hindsight`, `argumentative` | shipped (post-hooks) |
 | `causal`, `bayesian`, `metacognition` | shipped (+ reasoning callables: counterfactual, abductive, analogy, …) |
 | `rl` | shipped (ε-greedy choice + Q-learning persisted across runs) |
+| `contract` | shipped (runtime before/after guarantees; on_violation = refuse \| audit \| retry(N)) |
 | `evolve`, `identity`, `predict`, `phenomenology` | planned — `predict`/`phenomenology` carry heavy ethics; see `PHILOSOPHY.md` first |
 
 | System integration | Status |
 |---|---|
-| Local `verify/` pass system over SIR | shipped |
+| Local `verify/` pass system over SIR (static) | shipped |
+| Runtime `tsr:contract` enforcement at effect boundaries | shipped (before/after; refuse/audit/retry) |
 | Local SQLite-backed `memory:semantic` | shipped |
 | Obsidian vault scan + scaffold | shipped |
 | Ollama backend (default) + Anthropic | shipped |

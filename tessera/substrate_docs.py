@@ -124,6 +124,17 @@ SUBSTRATE_DOCS: dict[str, dict] = {
         "status": "shipped",
     },
 
+    "contract": {
+        "summary": "Runtime guarantees — before/after assertions bound to an effect.",
+        "when_to_use": "When a specific prompt/tool/plan must satisfy a checkable "
+                       "guarantee at runtime (no PII in, output stays on-intent). "
+                       "The inverse of policy: a clause MUST hold or it's a "
+                       "violation. on_violation = refuse | audit | retry(N).",
+        "example_idiom": 'contract honest on prompt:explain { before: not contains_pii(value()) after: intent_match() >= 0.3 on_violation: retry(2) then refuse }',
+        "maps_to": "Design by contract (Meyer); runtime verification",
+        "status": "shipped",
+    },
+
     "eval": {
         "summary": "Test cases — declared inputs + expected outputs.",
         "when_to_use": "Calibration, regression testing, policy verification. "

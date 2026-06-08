@@ -103,6 +103,11 @@ def _classify(event: dict) -> EventClass:
     action = event.get("action") or ""
     if action.startswith(_GOVERNANCE_PREFIXES):
         return "governance"
+    # A contract refusal/error is a denial decision — part of the permanent
+    # proof trail, like any other refusal (not a routine operational event).
+    # contract:retry / contract:audit stay operational (routine churn).
+    if action in ("contract:refuse", "contract:error"):
+        return "governance"
     # ethics_applied with content makes any action governance-relevant
     if event.get("ethics_applied"):
         return "governance"

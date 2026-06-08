@@ -193,21 +193,25 @@ def _cmd_providers(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_eval(args: argparse.Namespace) -> int:
-    pm = parse_file(args.file)
-    module = lower(pm)
-    if not module.eval_cases:
-        print(f"no eval cases declared in {args.file}")
-        return 0
-    # Pick the first declared agent as the target unless --agent specified.
-    target = args.agent or next(iter(module.agents.keys()), None)
-    if not target:
-        print(f"no agent declared in {args.file}")
-        return 1
-
-    passed = 0
-    failed = 0
+def _is_refusal(result) -> bool:
+    """True when a run result represents a refusal — either a first-class
+    `Refusal` value (tool/plan contracts, policy) or a gate's refusal STRING
+    sentinel (`[contract-refused: …]`, `[approval-required: …]`,
+    `[precaution-refused: …]`, `[tom-refused: …]`, …). Prompt-level gates return
+    strings, not Refusal objects, so eval/doctor need this to assert them."""
     from .interp.eval import Refusal
+    if isinstance(result, Refusal):
+        return True
+    return (isinstance(result, str) and result.startswith("[")
+            and ("-refused" in result or "-required" in result))
+
+
+def _run_eval_cases(module, target):
+    """Run every declared eval case against `target`. Returns
+    (passed, failed, results) where results is a list of (name, ok, reasons).
+    Shared by `tessera eval` and `tessera doctor`."""
+    results: list[tuple[str, bool, list[str]]] = []
+    passed = failed = 0
     for case in module.eval_cases:
         try:
             result = run_agent(module, target, initial_beliefs=case.inputs)
@@ -224,18 +228,31 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 ok = False
                 reasons.append(f"expected {case.expect_equals!r}, got {result!r}")
         if case.expect_refusal:
-            if not isinstance(result, Refusal):
+            if not _is_refusal(result):
                 ok = False
                 reasons.append(f"expected refusal, got {result!r}")
-        status = "PASS" if ok else "FAIL"
-        print(f"  [{status}] {case.name}")
-        if not ok:
-            for r in reasons:
-                print(f"           {r}")
-        if ok:
-            passed += 1
-        else:
-            failed += 1
+        results.append((case.name, ok, reasons))
+        passed, failed = (passed + 1, failed) if ok else (passed, failed + 1)
+    return passed, failed, results
+
+
+def _cmd_eval(args: argparse.Namespace) -> int:
+    pm = parse_file(args.file)
+    module = lower(pm)
+    if not module.eval_cases:
+        print(f"no eval cases declared in {args.file}")
+        return 0
+    # Pick the first declared agent as the target unless --agent specified.
+    target = args.agent or next(iter(module.agents.keys()), None)
+    if not target:
+        print(f"no agent declared in {args.file}")
+        return 1
+
+    passed, failed, results = _run_eval_cases(module, target)
+    for name, ok, reasons in results:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+        for r in reasons:
+            print(f"           {r}")
     print(f"\n{passed}/{passed + failed} cases passed")
     return 0 if failed == 0 else 1
 
@@ -424,6 +441,130 @@ def _cmd_facts_clear(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fmt_on_violation(ov) -> str:
+    mode, n, fb = ov
+    return mode if mode != "retry" else f"retry({n}) then {fb}"
+
+
+def _contract_audit_counts(agent=None):
+    """Aggregate contract:* events from the audit graph → {name: {refuse, retry,
+    audit, error}}. The proof of what the contracts actually DID at runtime."""
+    from .adapters.audit import query_events
+    counts: dict[str, dict[str, int]] = {}
+    for e in query_events(action="contract:%", agent=agent, limit=1_000_000):
+        name = e.get("contract")
+        if not name:
+            continue
+        kind = e["action"].split(":", 1)[1]   # refuse | retry | audit | error
+        counts.setdefault(name, {}).setdefault(kind, 0)
+        counts[name][kind] += 1
+    return counts
+
+
+def _cmd_contracts(args: argparse.Namespace) -> int:
+    import json
+    pm = parse_file(args.file)
+    module = lower(pm)
+    contracts = getattr(module, "contracts", {}) or {}
+    if not contracts:
+        print(f"no contracts declared in {args.file}")
+        return 0
+
+    # Static diagnostics keyed by contract name (E830/E831/E832/E833).
+    diag_by: dict[str, list] = {}
+    for d in run_local(module):
+        if d.region.startswith("contract:"):
+            diag_by.setdefault(d.region[len("contract:"):], []).append(d)
+    counts = _contract_audit_counts(agent=args.agent)
+
+    if args.json:
+        for c in contracts.values():
+            print(json.dumps({
+                "name": c.name,
+                "target": c.target_label,
+                "before": [s for _, s in c.before],
+                "after": [s for _, s in c.after],
+                "on_violation": list(c.on_violation),
+                "diagnostics": [d.code for d in diag_by.get(c.name, [])],
+                "audit": counts.get(c.name, {}),
+            }))
+        return 0
+
+    for c in contracts.values():
+        print(f"{c.name}  on {c.target_label}")
+        for _, s in c.before:
+            print(f"    before: {s}")
+        for _, s in c.after:
+            print(f"    after:  {s}")
+        print(f"    on_violation: {_fmt_on_violation(c.on_violation)}")
+        for d in diag_by.get(c.name, []):
+            print(f"    ! {d.code} {d.severity}: {d.message}")
+        live = counts.get(c.name)
+        if live:
+            print("    audit: " + ", ".join(f"{k}={v}" for k, v in sorted(live.items())))
+        else:
+            print("    audit: (no recorded events yet — run the agent first)")
+        print()
+    return 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    import json
+    pm = parse_file(args.file)
+    module = lower(pm)
+    diags = run_local(module)
+    errors = [d for d in diags if d.severity == "error"]
+    warnings = [d for d in diags if d.severity == "warning"]
+
+    eval_ran = False
+    eval_passed = eval_failed = 0
+    if module.eval_cases:
+        target = args.agent or next(iter(module.agents.keys()), None)
+        if target:
+            eval_ran = True
+            eval_passed, eval_failed, _ = _run_eval_cases(module, target)
+
+    contracts = getattr(module, "contracts", {}) or {}
+    substrates_used = sorted({b.substrate for b in pm.blocks})
+
+    from .adapters.audit import query_events
+    recent = query_events(limit=200)
+    prefixes = ("contract:", "refuse", "policy_violation", "tool:", "prompt:", "spawn:")
+    by_prefix = {p: sum(1 for e in recent if e["action"].startswith(p)) for p in prefixes}
+
+    healthy = not errors and eval_failed == 0
+
+    if args.json:
+        print(json.dumps({
+            "file": args.file,
+            "healthy": healthy,
+            "verify": {"errors": len(errors), "warnings": len(warnings),
+                       "diagnostics": [str(d) for d in diags]},
+            "eval": {"ran": eval_ran, "passed": eval_passed, "failed": eval_failed},
+            "substrates": substrates_used,
+            "contracts": {c.name: c.target_label for c in contracts.values()},
+            "audit_recent": by_prefix,
+        }))
+        return 0 if healthy else 1
+
+    print(f"doctor: {args.file}")
+    print(f"  health:     {'OK' if healthy else 'NEEDS ATTENTION'}")
+    print(f"  verify:     {len(errors)} error(s), {len(warnings)} warning(s)")
+    for d in diags:
+        print(f"                {d}")
+    print(f"  eval:       {eval_passed}/{eval_passed + eval_failed} cases passed"
+          if eval_ran else "  eval:       (no eval cases declared)")
+    print(f"  substrates: {', '.join(substrates_used)}")
+    if contracts:
+        print(f"  contracts:  {len(contracts)} — "
+              + ", ".join(f"{c.name}→{c.target_label}" for c in contracts.values()))
+    nonzero = {k: v for k, v in by_prefix.items() if v}
+    if nonzero:
+        print(f"  audit (last {len(recent)}): "
+              + ", ".join(f"{k}={v}" for k, v in nonzero.items()))
+    return 0 if healthy else 1
+
+
 def _cmd_version(_args: argparse.Namespace) -> int:
     print(f"tessera {__version__}")
     return 0
@@ -560,6 +701,22 @@ def main(argv: list[str] | None = None) -> int:
     fctc.add_argument("--before", help="ISO timestamp — delete facts created before it")
     fctc.add_argument("--all", action="store_true", help="Delete every fact (required to wipe)")
     fctc.set_defaults(fn=_cmd_facts_clear)
+
+    # contracts — list declared contracts + their live audit-derived counts
+    ctr = sub.add_parser("contracts",
+                         help="List a file's runtime contracts + their audit-derived fire counts")
+    ctr.add_argument("file")
+    ctr.add_argument("--agent", help="Restrict live audit counts to one agent")
+    ctr.add_argument("--json", action="store_true", help="emit one JSON object per contract")
+    ctr.set_defaults(fn=_cmd_contracts)
+
+    # doctor — one-stop health: verify + eval + inventory + audit summary
+    doc = sub.add_parser("doctor",
+                         help="One-stop health report for a .t.md: verify + eval + audit summary")
+    doc.add_argument("file")
+    doc.add_argument("--agent", help="Target agent for eval cases (default: first declared)")
+    doc.add_argument("--json", action="store_true")
+    doc.set_defaults(fn=_cmd_doctor)
 
     # evolve
     ev = sub.add_parser("evolve", help="Run the tsr:evolve block in a file")

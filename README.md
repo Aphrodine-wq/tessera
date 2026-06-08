@@ -92,6 +92,7 @@ tessera substrates    # prints English breakdown of every substrate category
 | `tool` | external callable (python or LangChain) | `tool web_search(q) from langchain_community.tools.DuckDuckGoSearchRun` |
 | `neural` | torch nn.Module declared inline | `model classifier { linear in=4 out=8; relu; ... }` |
 | `rl` | ε-greedy choice + Q-learning that persists across runs | `rl { agent: Router actions: [fast, careful] state_from: [topic] }` |
+| `contract` | runtime guarantee bound to an effect; before/after assertions enforced as it runs | `contract honest on prompt:explain { before: not contains_pii(value()) on_violation: refuse }` |
 
 A few more are planned (`evolve`, `identity`, `predict`, `phenomenology`). Run
 `tessera substrates` to see the full menu.
@@ -132,6 +133,32 @@ Plus **fan-out/gather**: `send` a child several messages, then `recv all from X`
 to collect every reply at once. See [`examples/orchestration.t.md`](examples/orchestration.t.md)
 for all of it in one agent.
 
+### Runtime contracts — guarantees enforced while it runs
+
+The `verify/` pass system checks substrate and capability boundaries *before* a
+run. A `tsr:contract` is the runtime half: author-declared before/after
+assertions bound to a named effect (`prompt:X`, `tool:Y`, `plan:Z`), enforced at
+the moment that effect fires. It's the **inverse of `tsr:policy`** — a policy
+*forbids* (true → refuse); a contract *guarantees* (a clause must hold, false →
+violation).
+
+```markdown
+\`\`\`tsr:contract
+contract honest_explanation on prompt:explain {
+  before: not contains_pii(value())     # gate the input before any cost
+  after:  intent_match() >= 0.3          # output stayed on the declared intent
+  after:  not extracts(value())          # and didn't drift into an upsell
+  on_violation: retry(2) then refuse     # re-drive twice, then refuse rather than ship
+}
+\`\`\`
+```
+
+`on_violation` is `refuse` (block), `audit` (record + proceed), or `retry(N)
+then refuse|audit` (re-drive the effect up to N times — `after` clauses only —
+then fall back). Every check lands in the audit graph (`contract:refuse`,
+`contract:retry`, `contract:audit`). See
+[`examples/contracts.t.md`](examples/contracts.t.md).
+
 ---
 
 ## Examples
@@ -150,6 +177,7 @@ slice of the language.
 | `vault_assistant.t.md` | `memory:episodic` event log |
 | `knowledge_assistant.t.md` | `memory:semantic` round-trip into local SQLite |
 | `migration_advisor.t.md` | built-in traits + ethics + audit (full governance stack) |
+| `contracts.t.md` | runtime `tsr:contract` — before/after guarantees with `retry`/`refuse` |
 
 ---
 
@@ -167,10 +195,18 @@ tessera vault new ~/Desktop/TheVault/Agents/NewBot.t.md \
 tessera compile examples/researcher.t.md \
     --run TeamLead --set topic="fair pricing"
 
+# Inspect a file's runtime contracts + what they did at runtime (audit-derived)
+tessera contracts examples/contracts.t.md          # clauses, on_violation, live counts
+tessera contracts examples/contracts.t.md --json
+
+# One-stop health: verify + eval + inventory + recent-audit summary
+tessera doctor examples/contracts.t.md             # exits non-zero on errors / eval fails
+
 # Query the persistent audit store — provenance for any past run
 tessera audit query --agent MigrationAdvisor --intent advise_safely --count
-tessera audit query --action skill_promotion_pending
+tessera audit query --action "contract:%" --count  # every contract decision
 tessera audit purge --days 30   # operational only; governance untouched
+                                # (contract:refuse is governance — never purged)
 
 # Inspect / clean the memory:semantic fact store (~/.tessera/semantic.db)
 tessera facts list                    # schema breakdown when unfiltered
@@ -214,12 +250,12 @@ shadow that lives only for the run.
 
 ## Status
 
-- **Tests:** 332 passing, 8 skipped (the skips need the optional `tson`
+- **Tests:** 393 passing, 8 skipped (the skips need the optional `tson`
   package for constrained decoding — see `tessera/adapters/wire/`).
-- **Shipped substrates (30):** logic, agent, memory:working, memory:workspace,
+- **Shipped substrates (31):** logic, agent, memory:working, memory:workspace,
   memory:episodic, memory:semantic, memory:procedural, prompt, tool, neural,
-  traits, intent, ethics, autonomy, policy, eval, iit, welfare, ast, tom,
-  precaution, moral_foundations, dual_process, gricean, hindsight,
+  traits, intent, ethics, autonomy, policy, contract, eval, iit, welfare, ast,
+  tom, precaution, moral_foundations, dual_process, gricean, hindsight,
   argumentative, causal, bayesian, metacognition, rl. Run `tessera substrates`.
 - **Reasoning-tool callables (from a plan, no new block):** `causal_backdoor`,
   `causal_identifiable`, `counterfactual` (over a declared `tsr:causal` DAG),

@@ -99,6 +99,28 @@ class Pred(Expr):
         return fn(ctx, *[a.eval(ctx) for a in self.args])
 
 
+def predicate_names(expr: "Expr") -> set[str]:
+    """Every predicate name referenced anywhere in an expression tree. Lets a
+    static pass flag unknown predicates (e.g. `holds(NetworkOut)` — a bareword
+    parses as a zero-arg predicate `NetworkOut`, which would fail-closed at
+    runtime) before a run instead of at it."""
+    if isinstance(expr, Pred):
+        names = {expr.name}
+        for a in expr.args:
+            names |= predicate_names(a)
+        return names
+    if isinstance(expr, (And_, Or_, Cmp)):
+        return predicate_names(expr.a) | predicate_names(expr.b)
+    if isinstance(expr, Not_):
+        return predicate_names(expr.a)
+    return set()
+
+
+def known_predicates() -> set[str]:
+    """The registered predicate names, for static validation."""
+    return set(_PREDICATES)
+
+
 # --------------------------------------------------------------------------
 # Runtime context
 # --------------------------------------------------------------------------
@@ -219,12 +241,40 @@ def _value(ctx: ActionContext):
     return ctx.value
 
 
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_STOP = frozenset(
+    "the a an and or of to for in on at is are be it this that with as by from".split()
+)
+
+
+def _intent_match(ctx: ActionContext) -> float:
+    """Lexical overlap in [0,1] between the action's result (`value`) and the
+    active intent string — a cheap, deterministic, dependency-free drift check.
+
+    Used in `after` clauses as `intent_match() >= 0.x` to catch an LLM that
+    wandered off the plan's declared intent. Token Jaccard over content words;
+    upgrades to embedding cosine automatically when sentence-transformers is on
+    the path (see `cache._embed`), but the floor here never needs a model so the
+    gate is testable offline.
+    """
+    out = ctx.value
+    intent = ctx.intent
+    if not out or not intent:
+        return 0.0
+    a = {w for w in _WORD_RE.findall(str(out).lower()) if w not in _STOP}
+    b = {w for w in _WORD_RE.findall(str(intent).lower()) if w not in _STOP}
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 _PREDICATES: dict[str, Callable[..., Any]] = {
     "contains_pii":   _contains_pii,
     "holds":          _holds,
     "action_class":   _action_class,
     "extracts":       _extracts,
     "intent_is":      _intent_is,
+    "intent_match":   _intent_match,
     "cost_remaining": _cost_remaining,
     "value":          _value,
 }

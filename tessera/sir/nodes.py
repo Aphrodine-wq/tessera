@@ -283,6 +283,38 @@ class PolicyDecl:
 
 
 @dataclass
+class ContractDecl:
+    """A runtime contract — author-declared before/after assertions bound to a
+    named effect (`prompt:X`, `tool:Y`, `plan:Z`).
+
+    Unlike `tsr:policy` (a prohibition: `forbid when <expr>` refuses on True),
+    a contract is a GUARANTEE: each `before`/`after` clause is an assertion that
+    MUST hold, and a clause evaluating False is the violation. Clauses are
+    parsed `policy_lang` expressions evaluated against an ActionContext —
+    `before` clauses see the action's inputs, `after` clauses see its result via
+    `value()` (and `intent_match()` for output-vs-intent drift).
+
+    `on_violation` is `(mode, n, fallback)`:
+      - ("refuse", 0, "")     — block the action, return a refusal
+      - ("audit",  0, "")     — record the violation, let the action stand
+      - ("retry",  N, F)      — re-drive the effect up to N times (after-clauses
+                                only); on exhaustion fall back to F ("refuse" |
+                                "audit"). before-clauses can't regenerate inputs,
+                                so a retry there degrades to refuse (verify warns).
+    """
+    name: str
+    target_kind: str                                   # "prompt" | "tool" | "plan"
+    target_name: str                                   # the declared effect's name
+    before: list[tuple[Any, str]] = field(default_factory=list)  # (parsed Expr, src)
+    after: list[tuple[Any, str]] = field(default_factory=list)
+    on_violation: tuple[str, int, str] = ("refuse", 0, "")
+
+    @property
+    def target_label(self) -> str:
+        return f"{self.target_kind}:{self.target_name}"
+
+
+@dataclass
 class EvalCaseDecl:
     """One test case in an `eval { case "X" { ... } }` block."""
     name: str
@@ -681,6 +713,7 @@ class Module:
     knowledge_schemas: dict[str, KnowledgeSchemaDecl] = field(default_factory=dict)
     relations: dict[str, RelationDecl] = field(default_factory=dict)
     policies: dict[str, PolicyDecl] = field(default_factory=dict)
+    contracts: dict[str, ContractDecl] = field(default_factory=dict)
     eval_cases: list[EvalCaseDecl] = field(default_factory=list)
     skills: dict[str, SkillDecl] = field(default_factory=dict)
     traits: dict[str, TraitDecl] = field(default_factory=dict)

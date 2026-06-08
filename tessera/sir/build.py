@@ -39,7 +39,7 @@ from dataclasses import dataclass
 
 from ..parser.module import ParsedModule, SubstrateBlock
 from .nodes import (
-    AutonomyDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
+    AutonomyDecl, ContractDecl, Effect, EpisodicEventDecl, EthicsDecl, EthicsPrinciple,
     EvalCaseDecl, IntentDecl, KnowledgeSchemaDecl, RelationDecl, Module, Node,
     ASTDecl, BayesianDeclSIR, BayesianLikelihoodSpec, BayesianVarSpec,
     CausalDAGDecl, EvolveDecl, IITDecl, MetacognitionDecl, NeuralModelDecl, Op, PolicyDecl, PromptDecl, Region, SkillDecl, ToMDecl, ToolDecl, WelfareDecl,
@@ -1095,6 +1095,12 @@ _POLICY_REQUIRE_CONTAINS_RE = re.compile(r'require\s+contains\s+"([^"]+)"')
 _POLICY_FORBID_WHEN_RE = re.compile(r'forbid\s+when\s+([^\n;]+)')
 _POLICY_PERMIT_WHEN_RE = re.compile(r'permit\s+when\s+([^\n;]+)')
 
+_CONTRACT_HEAD_RE = re.compile(r"contract\s+(\w+)\s+on\s+(prompt|tool|plan)\s*:\s*([\w.]+)\s*\{")
+_CONTRACT_BEFORE_RE = re.compile(r"before\s*:\s*([^\n;]+)")
+_CONTRACT_AFTER_RE = re.compile(r"after\s*:\s*([^\n;]+)")
+_CONTRACT_ONVIOL_RE = re.compile(r"on_violation\s*:\s*([^\n;]+)")
+_CONTRACT_RETRY_RE = re.compile(r"retry\s*\(\s*(\d+)\s*\)(?:\s+then\s+(refuse|audit))?")
+
 _EVAL_CASE_RE = re.compile(r'case\s+"([^"]+)"\s*\{')
 _EVAL_INPUT_RE = re.compile(r'input\s+(\w+)\s*=\s*"([^"]*)"')
 _EVAL_EXPECT_CONTAINS_RE = re.compile(r'expect_contains\s*=\s*"([^"]*)"')
@@ -1206,6 +1212,48 @@ def _lower_policy(block: SubstrateBlock, mod: Module) -> None:
             raise SyntaxFail(f"policy {name!r} permit-when expression: {e}")
         rules.append(("permit_when", {"expr": expr, "src": rm.group(1).strip()}))
     mod.policies[name] = PolicyDecl(name=name, rules=rules)
+
+
+def _parse_on_violation(raw: str) -> tuple[str, int, str]:
+    """`refuse` | `audit` | `retry(N)` | `retry(N) then refuse|audit`."""
+    s = raw.strip()
+    rm = _CONTRACT_RETRY_RE.fullmatch(s)
+    if rm:
+        return ("retry", int(rm.group(1)), rm.group(2) or "refuse")
+    if s in ("refuse", "audit"):
+        return (s, 0, "")
+    raise SyntaxFail(
+        f"contract on_violation {raw!r} not recognized — expected "
+        "`refuse`, `audit`, `retry(N)`, or `retry(N) then refuse|audit`")
+
+
+def _lower_contract(block: SubstrateBlock, mod: Module) -> None:
+    from ..policy_lang import parse as _parse_expr, PolicySyntaxError
+    src = block.body
+    for hm in _CONTRACT_HEAD_RE.finditer(src):
+        name, kind, target = hm.group(1), hm.group(2), hm.group(3)
+        brace = src.index("{", hm.end() - 1)
+        body, _ = _balanced_extract(src, brace)
+        before: list[tuple] = []
+        after: list[tuple] = []
+        for cm in _CONTRACT_BEFORE_RE.finditer(body):
+            raw = cm.group(1).strip()
+            try:
+                before.append((_parse_expr(raw), raw))
+            except PolicySyntaxError as e:
+                raise SyntaxFail(f"contract {name!r} before-clause: {e}")
+        for cm in _CONTRACT_AFTER_RE.finditer(body):
+            raw = cm.group(1).strip()
+            try:
+                after.append((_parse_expr(raw), raw))
+            except PolicySyntaxError as e:
+                raise SyntaxFail(f"contract {name!r} after-clause: {e}")
+        ovm = _CONTRACT_ONVIOL_RE.search(body)
+        on_violation = _parse_on_violation(ovm.group(1)) if ovm else ("refuse", 0, "")
+        mod.contracts[name] = ContractDecl(
+            name=name, target_kind=kind, target_name=target,
+            before=before, after=after, on_violation=on_violation,
+        )
 
 
 def _lower_eval(block: SubstrateBlock, mod: Module) -> None:
@@ -2071,6 +2119,8 @@ def lower(pm: ParsedModule) -> Module:
             _lower_argumentative(block, mod)
         elif block.substrate == "policy":
             _lower_policy(block, mod)
+        elif block.substrate == "contract":
+            _lower_contract(block, mod)
         elif block.substrate == "eval":
             _lower_eval(block, mod)
         else:

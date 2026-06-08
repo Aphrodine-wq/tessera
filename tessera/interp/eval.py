@@ -363,6 +363,12 @@ class World:
         intent = frame.intent if frame else None
         if intent is None and agent_name and agent_name in self.module.agents:
             intent = self.module.agents[agent_name].intent
+        # KNOWN LIMITATION (concurrency): `_audit_seq` is not lock-guarded, so
+        # with concurrent agents (run_agent concurrent=True) the seq numbers may
+        # collide/skip and event *ordering* in `self.audit` is best-effort. The
+        # `append` below is atomic under the GIL, so event *counts* are exact —
+        # which is what tests/test_contracts_stress.py asserts on. A future fix
+        # is a Lock here (and around semantic_cache_put). See CHANGELOG.
         self._audit_seq += 1
         evt = AuditEvent(
             seq=self._audit_seq,
@@ -555,9 +561,32 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
         # 3. External tool (LangChain or bare python callable)
         tool = world.module.tools.get(callee_name)
         if tool is not None:
-            res = _invoke_tool(tool, arg_vals, world,
-                               called_via=CalledVia.DIRECT, agent_name=agent_name)
-            world.record(agent_name, f"tool:{callee_name}", called_via="direct")
+            from . import substrates
+            label = f"tool:{callee_name}"
+            intent_t = _active_intent(world, agent_name)
+            caps_t = (frozenset(world.state_for(agent_name).capabilities)
+                      if agent_name is not None else frozenset())
+            # Contract `before` — gate inputs before the tool fires.
+            if agent_name is not None:
+                res_b = substrates.evaluate_contracts(
+                    world, agent_name, label, "before",
+                    value=arg_vals, intent=intent_t, caps=caps_t, args=arg_vals)
+                ref = substrates.enforce_contract_refusal(world, agent_name, res_b, label, "before")
+                if ref is not None:
+                    return ref
+
+            def _do_tool():
+                r = _invoke_tool(tool, arg_vals, world,
+                                 called_via=CalledVia.DIRECT, agent_name=agent_name)
+                world.record(agent_name, label, called_via="direct")
+                return r
+
+            res = _do_tool()
+            # Contract `after` — assert over the tool's result, retry re-invokes.
+            if agent_name is not None:
+                res = _enforce_after_contracts(
+                    world, agent_name, label, res, intent_t, caps_t,
+                    regen=_do_tool, as_refusal=True)
             return res
 
         # 4. Neural model — torch forward
@@ -654,9 +683,9 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
             if refusal is not None:
                 return refusal
             result = eval_region(plan_region, world, agent_name=owner)
-            # hindsight after-action review on plan completion.
-            substrates.on_plan_exit(world, owner, plan_name, plan_region, result)
-            return result
+            # hindsight after-action review + contract `after` enforcement.
+            replaced = substrates.on_plan_exit(world, owner, plan_name, plan_region, result)
+            return replaced if replaced is not None else result
         finally:
             state.plan_stack.pop()
 
@@ -1141,6 +1170,65 @@ def _resolve_prompt_schema(world, prompt):
     return compiled
 
 
+def _active_intent(world: World, agent_name: str | None) -> str | None:
+    """The intent governing the agent right now — active plan's intent, falling
+    back to the agent's declared top-level intent. Mirrors the audit stamping."""
+    if agent_name is None:
+        return None
+    st = world.state_for(agent_name)
+    frame = st.active_plan if st else None
+    intent = frame.intent if frame else None
+    if intent is None and agent_name in world.module.agents:
+        intent = world.module.agents[agent_name].intent
+    return intent
+
+
+def _contract_refusal(cname: str, clause: str, phase: str, as_refusal: bool):
+    """A blocked contract's return value — a `Refusal` for value-typed sites
+    (tool), a refusal string for text-typed sites (prompt), matching each
+    site's existing refusal convention."""
+    if as_refusal:
+        return Refusal(reason=f"contract {cname}: {phase} clause failed — {clause}",
+                       policy=f"contract:{cname}")
+    return f"[contract-refused: {cname} — {phase}: {clause}]"
+
+
+def _enforce_after_contracts(world, agent_name, target_label, output, intent, caps,
+                             regen, *, as_refusal: bool):
+    """Run `after`-clause contracts for an effect, honoring on_violation:
+    `audit` (record + keep), `refuse` (block), `retry(N) then F` (re-drive via
+    the 0-arg `regen` up to N times, then fall back to F). Returns the final
+    output, or a refusal value when blocked."""
+    from . import substrates
+    attempt = 0
+    while True:
+        ok, cname, clause, ov = substrates.evaluate_contracts(
+            world, agent_name, target_label, "after",
+            value=output, intent=intent, caps=caps)
+        if ok:
+            return output
+        mode, n, fallback = ov
+        if mode == "audit":
+            world.record(agent_name, "contract:audit", contract=cname,
+                         phase="after", clause=clause, target=target_label)
+            return output
+        if mode == "retry" and attempt < n:
+            attempt += 1
+            world.record(agent_name, "contract:retry", contract=cname,
+                         attempt=attempt, max=n, target=target_label)
+            output = regen()
+            continue
+        if mode == "retry" and fallback == "audit":
+            world.record(agent_name, "contract:audit", contract=cname,
+                         phase="after", clause=clause, target=target_label,
+                         note="retry exhausted")
+            return output
+        world.record(agent_name, "contract:refuse", contract=cname,
+                     phase="after", clause=clause, target=target_label,
+                     attempts=attempt)
+        return _contract_refusal(cname, clause, "after", as_refusal)
+
+
 def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
     from ..adapters.llm import get_backend
     from ..cache import semantic_cache_lookup, semantic_cache_put
@@ -1176,6 +1264,22 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         blocked = substrates.on_prompt_input(world, agent_name, prompt.name, rendered, caps)
         if blocked is not None:
             return blocked
+
+    # Author-declared contract `before` clauses — also BEFORE any cost. Inputs
+    # can't be regenerated, so a violation refuses (or audits) rather than retries.
+    intent = _active_intent(world, agent_name)
+    if agent_name is not None:
+        ok, cname, clause, ov = substrates.evaluate_contracts(
+            world, agent_name, f"prompt:{prompt.name}", "before",
+            value=rendered, intent=intent, caps=caps)
+        if not ok:
+            if ov[0] == "audit":
+                world.record(agent_name, "contract:audit", contract=cname,
+                             phase="before", clause=clause, target=f"prompt:{prompt.name}")
+            else:
+                world.record(agent_name, "contract:refuse", contract=cname,
+                             phase="before", clause=clause, target=f"prompt:{prompt.name}")
+                return _contract_refusal(cname, clause, "before", as_refusal=False)
 
     # Build the prompt preamble BEFORE the cache lookup (a framed prompt is a
     # genuinely different request, so it caches separately). Ethics is outermost
@@ -1227,43 +1331,58 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
         compiled = _resolve_prompt_schema(world, prompt)
     cache_key = rendered if compiled is None else f"{rendered}\n\x00grammar:{compiled.grammar_hash}"
 
-    # Semantic cache — short-circuit if a near-identical prompt has been seen.
-    # Slow-path (deliberative) calls bypass the cache by design.
-    cached = None if slow else semantic_cache_lookup(cache_key)
-    if cached is not None:
-        world.region_results.setdefault("_semantic_cache_hits", 0)
-        world.region_results["_semantic_cache_hits"] += 1
-        world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
-                     ethics_applied=ethics_applied, recalled=recalled,
-                     routed=("slow" if slow else "fast"), cost=0.0, cached=True)
+    # Produce one output — cache short-circuit (slow/forced calls bypass it),
+    # else a backend completion — then run the built-in output gates. Wrapped in
+    # a closure so a contract `retry` can re-drive a fresh generation. Returns
+    # (text, emitted_result_or_None, gated) where `gated` means a built-in gate
+    # already replaced the text and no further enforcement should run.
+    def _produce(force_fresh: bool):
+        cached = None if (slow or force_fresh) else semantic_cache_lookup(cache_key)
+        if cached is not None:
+            world.region_results.setdefault("_semantic_cache_hits", 0)
+            world.region_results["_semantic_cache_hits"] += 1
+            world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
+                         ethics_applied=ethics_applied, recalled=recalled,
+                         routed=("slow" if slow else "fast"), cost=0.0, cached=True)
+            text, emitted = cached["text"], None
+        else:
+            backend = get_backend()
+            if compiled is not None:
+                from ..adapters.wire import enforce_complete
+                r = enforce_complete(backend, rendered, compiled)
+            else:
+                r = backend.complete(rendered)
+            world.region_results.setdefault("_prompt_cost", 0.0)
+            world.region_results["_prompt_cost"] += r.cost_dollars
+            semantic_cache_put(cache_key, r.text, backend=r.backend, model=r.model)
+            world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
+                         ethics_applied=ethics_applied, recalled=recalled,
+                         routed=("slow" if slow else "fast"), cost=r.cost_dollars, cached=False)
+            text, emitted = r.text, r
         if agent_name is not None:
-            gated = substrates.on_prompt_output(world, agent_name, prompt.name, cached["text"])
+            gated = substrates.on_prompt_output(world, agent_name, prompt.name, text)
             if gated is not None:
-                return gated
-        return cached["text"]
+                return gated, None, True
+        return text, emitted, False
 
-    backend = get_backend()
-    if compiled is not None:
-        from ..adapters.wire import enforce_complete
-        result = enforce_complete(backend, rendered, compiled)
-    else:
-        result = backend.complete(rendered)
-    world.region_results.setdefault("_prompt_cost", 0.0)
-    world.region_results["_prompt_cost"] += result.cost_dollars
-    semantic_cache_put(cache_key, result.text, backend=result.backend, model=result.model)
-    world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
-                 ethics_applied=ethics_applied, recalled=recalled,
-                 routed=("slow" if slow else "fast"), cost=result.cost_dollars, cached=False)
-    if agent_name is not None:
-        gated = substrates.on_prompt_output(world, agent_name, prompt.name, result.text)
-        if gated is not None:
-            return gated
+    text, emitted, gated = _produce(force_fresh=False)
+    if gated:
+        return text
+
     # THEME B: close the loop. When the prompt opted in with execute=true AND is
     # schema-bound, dispatch the emitted !call and return the tool result. Runs
     # AFTER on_prompt_output so output governance still inspects the record first.
-    if compiled is not None and getattr(prompt, "execute", False):
-        return _dispatch_emitted_call(prompt, result.text, world, agent_name)
-    return result.text
+    # (The emitted-call path returns a tool value, not text, so contract `after`
+    # clauses — which assert over text + intent — don't apply to it.)
+    if emitted is not None and compiled is not None and getattr(prompt, "execute", False):
+        return _dispatch_emitted_call(prompt, emitted.text, world, agent_name)
+
+    # Author-declared contract `after` clauses, with retry re-driving _produce.
+    if agent_name is not None:
+        text = _enforce_after_contracts(
+            world, agent_name, f"prompt:{prompt.name}", text, intent, caps,
+            regen=lambda: _produce(force_fresh=True)[0], as_refusal=False)
+    return text
 
 
 def _dispatch_emitted_call(prompt, record_text, world, agent_name) -> Any:

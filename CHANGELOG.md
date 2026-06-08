@@ -1,5 +1,83 @@
 # Changelog
 
+## 2026-06-04 — Contract hardening: inspection tooling, stress + property tests
+
+Followed the runtime-contracts ship (below) with coverage, stress, and ways to
+*see* contracts working. Tests **353 → 393 green**.
+
+- **`tessera contracts <file>`.** Lists every contract — target, before/after
+  clauses, on_violation — and cross-references the audit graph for live
+  fire/refuse/retry/error counts. The contract-specific inspection surface.
+- **`tessera doctor <file>`.** One-stop health for any `.t.md`: verify error/
+  warning summary, eval results, substrate + contract inventory, recent-audit
+  breakdown. Exits non-zero on verify errors or eval failures.
+- **`tessera eval` now sees contract refusals.** `expect_refusal` matched only
+  first-class `Refusal` values, so prompt-contract refusals (a `[contract-
+  refused: …]` string) slipped through. A shared `_is_refusal` helper now
+  recognizes both — which also fixes the same blind spot for precaution/tom/
+  approval string gates.
+- **E833: unknown-predicate lint.** A bareword like `holds(NetworkOut)` parses
+  as a zero-arg predicate `NetworkOut` and fails-closed at runtime (silently
+  refusing everything). The contract pass now flags it at compile time and
+  suggests `holds("NetworkOut")`.
+- **Contract refusals are governance-tier.** `contract:refuse` / `contract:error`
+  now route to the permanent governance audit store like every other refusal
+  (they were landing in the 30-day operational store). `contract:retry` /
+  `contract:audit` stay operational (routine churn).
+- **Stress + property tests.** A 12-agent concurrent storm through one contract,
+  supervision re-driving a contract `Refusal`, a 50-deep retry budget, 100-event
+  volume, plus hypothesis property tests (on_violation round-trips, random
+  contracts always compile/verify, `intent_match()` bounded). Declared
+  `hypothesis` in dev deps.
+
+### Known limitation (concurrency)
+
+Surfaced by the stress tests, **not introduced by contracts** — these are
+pre-existing and affect every substrate:
+
+- `World.record` increments `_audit_seq` without a lock, so under concurrent
+  agents seq numbers may collide/skip and audit *ordering* is best-effort.
+  `list.append` is GIL-atomic, so event *counts* stay exact.
+- `semantic_cache_put` updates `_SEM_MEM` + appends JSONL without a lock; under
+  concurrency a put can be lost or interleaved.
+
+Neither affects whether a contract *fires* (enforcement runs on whatever text is
+produced). The fix is a `Lock` in both spots — deferred as a focused follow-up.
+
+## 2026-06-04 — Runtime contracts: author-declarable guarantees, enforced as it runs
+
+Tessera's verification was static-only — the `verify/` passes check substrate
+and capability boundaries before a run, but couldn't say anything about an LLM's
+*actual* behavior. The hardcoded runtime gates (precaution, moral_foundations,
+welfare, ast, tom) proved the hooks existed; they just weren't author-reachable.
+The new `tsr:contract` substrate generalizes them into a first-class guarantee.
+Tests **332 → 353 green**.
+
+- **`tsr:contract` substrate.** `contract C on prompt:X { before: … after: … on_violation: … }`
+  binds before/after assertions to a named effect — `prompt:X`, `tool:Y`, or
+  `plan:Z`. A clause is the **inverse of `tsr:policy`**: where a policy `forbid
+  when <expr>` refuses on *true*, a contract clause is a guarantee that must
+  *hold* — false is the violation. Clauses are `policy_lang` expressions, so the
+  whole predicate set (`contains_pii`, `holds`, `extracts`, `action_class`, …)
+  is reused as-is.
+- **Output-vs-intent drift.** New `intent_match()` predicate returns lexical
+  overlap in `[0,1]` between an action's result and the active intent, so an
+  `after: intent_match() >= 0.3` clause catches an LLM that wandered off the
+  plan it was serving. Deterministic and dependency-free (upgrades to embedding
+  cosine when sentence-transformers is present).
+- **`on_violation` policy.** `refuse` (block + audit), `audit` (record + let it
+  stand), or `retry(N) then refuse|audit` — an `after` violation re-drives the
+  effect up to N times before falling back. `before` clauses can't regenerate
+  inputs, so a retry there degrades to refuse (verify warns, E831).
+- **Enforced at the real boundaries.** `before`/`after` plug into the existing
+  hook sites (`on_prompt_input`/`on_prompt_output`, the tool-call chokepoint,
+  `on_plan_enter`/`on_plan_exit`). Every check is audited — `contract:refuse`,
+  `contract:retry`, `contract:audit`.
+- **Verify pass `pass_17_contracts`.** E830 (target effect doesn't exist —
+  the contract can never fire), E831 (retry on a `before`-only contract is
+  inert), E832 (no clauses). New example `examples/contracts.t.md` and
+  `tests/test_contracts.py` (13 tests).
+
 ## 2026-06-04 — Orchestration spine: one currency, five connected moves
 
 Multi-agent orchestration now reads as a single idea — **salience/priority is
