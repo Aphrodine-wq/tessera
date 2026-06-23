@@ -200,6 +200,7 @@ _EXTRACTION_LEX: set[str] = {
     # "abandon a branch") are deliberately excluded — a values gate that refuses
     # legitimate work is worse than one that misses a euphemism a human would catch.
     "reprice loyal", "gouge", "price gouge", "upcharge loyal",
+    "squeeze counterparty", "exploit counterparty",
     "defraud", "deceive", "betray",
 }
 
