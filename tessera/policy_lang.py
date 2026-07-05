@@ -248,25 +248,36 @@ _STOP = frozenset(
 )
 
 
-def _intent_match(ctx: ActionContext) -> float:
-    """Lexical overlap in [0,1] between the action's result (`value`) and the
-    active intent string — a cheap, deterministic, dependency-free drift check.
+def _intent_match_lexical(out: str, intent: str) -> float:
+    a = {w for w in _WORD_RE.findall(out.lower()) if w not in _STOP}
+    b = {w for w in _WORD_RE.findall(intent.lower()) if w not in _STOP}
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
 
-    Used in `after` clauses as `intent_match() >= 0.x` to catch an LLM that
-    wandered off the plan's declared intent. Token Jaccard over content words;
-    upgrades to embedding cosine automatically when sentence-transformers is on
-    the path (see `cache._embed`), but the floor here never needs a model so the
-    gate is testable offline.
+
+def _intent_match(ctx: ActionContext) -> float:
+    """Overlap in [0,1] between the action's result (`value`) and the active
+    intent string — a drift check used in `after` clauses as
+    `intent_match() >= 0.x` to catch an LLM that wandered off the plan's
+    declared intent.
+
+    Embedding cosine (see `cache._embed`/`cache._cosine`) when
+    sentence-transformers is actually on the path — semantic match survives
+    paraphrasing, which pure word-overlap can't. Falls back to token Jaccard
+    over content words otherwise: cheap, deterministic, dependency-free, and
+    the floor is what keeps this gate testable offline without a model.
     """
     out = ctx.value
     intent = ctx.intent
     if not out or not intent:
         return 0.0
-    a = {w for w in _WORD_RE.findall(str(out).lower()) if w not in _STOP}
-    b = {w for w in _WORD_RE.findall(str(intent).lower()) if w not in _STOP}
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
+    out, intent = str(out), str(intent)
+    from .cache import _cosine, _embed, embeddings_available
+
+    if embeddings_available():
+        return max(0.0, _cosine(_embed(out), _embed(intent)))
+    return _intent_match_lexical(out, intent)
 
 
 _PREDICATES: dict[str, Callable[..., Any]] = {

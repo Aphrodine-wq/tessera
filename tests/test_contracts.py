@@ -392,6 +392,29 @@ def test_intent_match_stopwords_only_is_zero():
     assert _intent_match(ActionContext(value="the and of", intent="to for in")) == 0.0
 
 
+def test_intent_match_uses_embedding_cosine_when_available(monkeypatch):
+    """When a real embedding model is on the path, intent_match should use
+    cosine similarity instead of lexical Jaccard — proven by picking a
+    value/intent pair with zero lexical overlap (Jaccard would score 0.0) and
+    stubbing the embedding path to return a distinct, nonzero score."""
+    import tessera.cache as cache
+
+    monkeypatch.setattr(cache, "embeddings_available", lambda: True)
+    monkeypatch.setattr(cache, "_embed", lambda text: [1.0, 0.0, 0.0])
+    monkeypatch.setattr(cache, "_cosine", lambda a, b: 0.87)
+
+    score = _intent_match(ActionContext(value="azure sky", intent="crimson dusk"))
+    assert score == 0.87
+
+
+def test_intent_match_falls_back_to_lexical_without_embeddings(monkeypatch):
+    import tessera.cache as cache
+
+    monkeypatch.setattr(cache, "embeddings_available", lambda: False)
+    score = _intent_match(ActionContext(value="roofing advice today", intent="roofing advice"))
+    assert abs(score - 2 / 3) < 1e-9
+
+
 # --------------------------------------------------------- clause-error path
 
 def test_clause_error_fails_closed():

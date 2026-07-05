@@ -96,6 +96,19 @@ def _semantic_cache_path() -> Path:
     return _ensure_cache_dir() / "semantic_prompts.jsonl"
 
 
+def embeddings_available() -> bool:
+    """True iff a real embedding model (not ``_embed``'s crude hashed-bag
+    fallback) would actually be used. Callers that have their own
+    dependency-free floor (e.g. ``policy_lang._intent_match``'s lexical
+    Jaccard) should check this before treating ``_embed``'s output as a
+    genuine semantic signal — the hashed fallback only agrees on identical or
+    near-identical text, which is a worse signal than a dedicated lexical
+    heuristic for anything paraphrased.
+    """
+    import importlib.util
+    return importlib.util.find_spec("sentence_transformers") is not None
+
+
 def _embed(text: str) -> list[float] | None:
     """Try sentence-transformers first; fall back to hashed-bag-of-tokens.
 
