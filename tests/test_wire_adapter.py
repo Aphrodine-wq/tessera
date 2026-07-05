@@ -111,6 +111,36 @@ def test_enforce_complete_none_tier_repairs_once():
 
 
 @requires_tson
+def test_enforce_complete_constrained_tier_repairs_semantic_miss():
+    """GBNF's honest limit: a large int range (here 0..1000000) is too big to
+    enumerate, so the grammar guarantees shape but not the bound — only the
+    validator catches an out-of-range value. That's a semantic miss on a
+    constrained tier, and it should now get repaired the same as a 'none'-tier
+    miss, not silently returned as-is."""
+    from tson import compile_schema
+
+    c = compile_schema("@schema ticket\n  title: str !\n  eta_days: int 0..1000000\n")
+
+    class _TwoShotGrammar:
+        name = "llamacpp"
+        cost_dollars = 0.0
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, prompt, **opts):
+            self.calls += 1
+            text = ("!ticket #c1 title:Fix eta_days:5000000" if self.calls == 1
+                    else "!ticket #c1 title:Fix eta_days:3")
+            return CompletionResult(text=text, backend="llamacpp", model="stub")
+
+    b = _TwoShotGrammar()
+    out = enforce_complete(b, "prompt", c)
+    assert b.calls == 2  # constrained tier now retries a semantic miss too
+    assert out.text == "!ticket #c1 title:Fix eta_days:3"
+
+
+@requires_tson
 def test_bound_prompt_uses_distinct_cache_key(monkeypatch):
     """A schema-bound prompt folds the grammar hash into its cache key, so it
     never collides with the same prompt text unconstrained."""

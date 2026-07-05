@@ -112,36 +112,40 @@ def _first_record_line(text: str) -> str:
     return text.strip().splitlines()[0].strip() if text.strip() else text
 
 
-def enforce_complete(backend, prompt_text: str, compiled: "Compiled", *, max_tokens: int = 256):
+def enforce_complete(
+    backend, prompt_text: str, compiled: "Compiled", *, max_tokens: int = 256, max_repairs: int = 1
+):
     """Run a constrained completion against ``backend`` and return a
     ``CompletionResult`` whose text is the validated wire record.
 
-    On a ``gbnf``/``jsonschema`` tier the structure is guaranteed; we still parse
-    out the record line and run the validator (which also enforces numeric ranges
-    the grammar can't). On the ``none`` tier we do one validate-and-repair round.
+    On a ``gbnf``/``jsonschema`` tier the *shape* is guaranteed by construction —
+    but a large/open numeric range is one of the documented honest limits (GBNF
+    enumerates small ranges exactly; a large one falls back to a generic
+    int/float rule and only the validator enforces the bound). A semantic miss
+    there still gets up to ``max_repairs`` bounded retries, same mechanism as
+    the ``none`` tier's retry: quote the validator's exact error back to the
+    model and re-ask. The grammar/schema constraint stays active on the retry,
+    so only the *value* needs another sample — structure was never in question.
     """
     _require()
     opts = constrain_opts(compiled, backend)
     result = backend.complete(prompt_text, max_tokens=max_tokens, **opts)
     line = _first_record_line(result.text)
-    try:
-        compiled.validate(line)
-        result.text = line
-        return result
-    except ValidationError as e:
-        if tier_for(backend) == "none":
+    attempt_prompt = prompt_text
+
+    for _ in range(max_repairs + 1):
+        try:
+            compiled.validate(line)
+            result.text = line
+            return result
+        except ValidationError as e:
             from tson.repair import build_repair_prompt
 
-            retry = backend.complete(
-                build_repair_prompt(prompt_text, result.text, e), max_tokens=max_tokens
-            )
-            line2 = _first_record_line(retry.text)
-            try:
-                compiled.validate(line2)
-                retry.text = line2
-            except ValidationError:
-                pass  # best-effort; caller sees the unrepaired text
-            return retry
-        # constrained tiers: structure is guaranteed; surface the line as-is
-        result.text = line
-        return result
+            attempt_prompt = build_repair_prompt(attempt_prompt, line, e)
+            result = backend.complete(attempt_prompt, max_tokens=max_tokens, **opts)
+            line = _first_record_line(result.text)
+
+    # Retries exhausted: best-effort, caller sees the last (possibly still
+    # invalid) attempt rather than raising.
+    result.text = line
+    return result
