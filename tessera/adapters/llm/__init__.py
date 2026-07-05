@@ -385,6 +385,13 @@ class LlamaCppBackend(LLMBackend):
     backend. A grammar passed in ``opts['grammar']`` is enforced at the token
     level, so a structurally invalid record is impossible to emit.
 
+    Uses ``create_chat_completion`` (not raw ``__call__``) so the GGUF's own
+    chat template is applied. Skipping the template makes an instruct model
+    treat the prompt as plain continuation instead of an instruction — it
+    then tends to write out its own turn markers (e.g. a literal
+    ``<|assistant|>``) as text rather than answering, which silently tanks
+    unconstrained completion quality independent of the grammar.
+
     Env: TESSERA_LLAMACPP_MODEL (or TESSERA_WIRE_GGUF) -> path to a .gguf;
     TESSERA_LLAMACPP_CTX (default 2048).
     """
@@ -418,11 +425,13 @@ class LlamaCppBackend(LLMBackend):
                 g = self._Grammar.from_string(gbnf)
                 self._grammar_cache[gbnf] = g
             kwargs["grammar"] = g
-        out = self._llm(prompt, **kwargs)
+        out = self._llm.create_chat_completion(
+            messages=[{"role": "user", "content": prompt}], **kwargs
+        )
         choice = out["choices"][0]
         usage = out.get("usage", {})
         return CompletionResult(
-            text=choice.get("text", ""),
+            text=choice.get("message", {}).get("content", "") or "",
             backend="llamacpp",
             model=os.path.basename(self.model_path),
             tokens_in=usage.get("prompt_tokens", 0),
@@ -432,7 +441,11 @@ class LlamaCppBackend(LLMBackend):
 
 class LlamaServerBackend(LLMBackend):
     """Talks to a running ``llama-server`` (llama.cpp's HTTP server) — the other
-    Tier-A path. POSTs ``grammar`` (raw GBNF) to /completion.
+    Tier-A path. POSTs ``grammar`` (raw GBNF) to the OpenAI-compatible
+    ``/v1/chat/completions`` endpoint so the model's chat template is applied
+    (the raw ``/completion`` endpoint takes the prompt verbatim, with no
+    template — a small/instruct model then treats an un-templated prompt as
+    plain continuation rather than an instruction).
 
     Env: TESSERA_LLAMA_SERVER (default http://localhost:8080).
     """
@@ -444,26 +457,28 @@ class LlamaServerBackend(LLMBackend):
 
     def complete(self, prompt: str, **opts) -> CompletionResult:
         body = {
-            "prompt": prompt,
-            "n_predict": opts.get("max_tokens", 256),
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": opts.get("max_tokens", 256),
             "temperature": opts.get("temperature", 0.7),
             "stream": False,
         }
         if opts.get("grammar"):
             body["grammar"] = opts["grammar"]
         req = urllib.request.Request(
-            f"{self.host}/completion",
+            f"{self.host}/v1/chat/completions",
             data=json.dumps(body).encode("utf-8"),
             headers={"content-type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=opts.get("timeout", 300)) as r:
             payload = json.loads(r.read().decode("utf-8"))
+        choice = payload["choices"][0]
+        usage = payload.get("usage", {})
         return CompletionResult(
-            text=payload.get("content", ""),
+            text=choice.get("message", {}).get("content", "") or "",
             backend="llama_server",
             model=payload.get("model", "llama_server"),
-            tokens_in=payload.get("tokens_evaluated", 0),
-            tokens_out=payload.get("tokens_predicted", 0),
+            tokens_in=usage.get("prompt_tokens", 0),
+            tokens_out=usage.get("completion_tokens", 0),
         )
 
 
