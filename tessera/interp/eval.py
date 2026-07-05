@@ -61,10 +61,46 @@ class CalledVia(str, Enum):
                        # refused by default so a smuggled call can't execute
 
 
+def _check_tool_autonomy(tool, arg_vals, world, agent_name) -> "Refusal | None":
+    """Autonomy gate for tool calls — mirrors `_call_prompt`'s gate (RFC autonomy
+    substrate), which previously only ran before LLM prompt calls; tool calls
+    fell through ungated. Runs BEFORE provenance and before any cost. A gated
+    action is blocked at `propose`, flagged at `act_with_rollback`, and silent
+    at `act_freely`. Callers skip this for `called_via=wire` (see `_invoke_tool`)
+    since a wire dispatch is a continuation of a prompt call already gated
+    under `prompt:{name}` — re-gating under `tool:{name}` would double-count
+    the same decision."""
+    from ..governance import approval_term
+
+    auto = world.module.autonomy
+    if auto is None or agent_name is None:
+        return None
+    rendered = f"{tool.name} {arg_vals}"
+    state = world.state_for(agent_name)
+    plan_name = state.active_plan.name if (state and state.active_plan) else ""
+    caps = frozenset(state.capabilities) if state else frozenset()
+    actx = TriggerContext(text=rendered, plan_name=plan_name, capabilities=caps)
+    term = approval_term(auto, actx, f"tool:{tool.name}")
+    if term is None:
+        return None
+    if auto.level == "propose":
+        world.record(agent_name, f"approval_blocked:{tool.name}",
+                     needs=term, level=auto.level)
+        return Refusal(
+            reason=f"tool {tool.name!r} requires approval: {term}",
+            policy="autonomy",
+        )
+    if auto.level == "act_with_rollback":
+        world.record(agent_name, f"approval_required:{tool.name}",
+                     needs=term, level=auto.level, acted=True)
+    return None
+
+
 def _check_tool_provenance(world, tool, called_via, agent_name) -> "Refusal | None":
     """Refuse a tool call sourced from untrusted text unless explicitly allowed.
-    Composes with (does not replace) autonomy/policy, which gate intent/capability.
-    `direct` and `wire` pass; only `text` is gated. Default behavior is unchanged
+    Composes with (does not replace) autonomy, which is now enforced separately
+    by `_check_tool_autonomy` — see `_invoke_tool` for call order. `direct` and
+    `wire` pass here; only `text` is gated. Default behavior is unchanged
     because no current code path produces `text`."""
     if called_via != CalledVia.TEXT:
         return None
@@ -578,7 +614,12 @@ def _eval_node(n: Node, values: dict[str, Any], world: World, region: Region,
             def _do_tool():
                 r = _invoke_tool(tool, arg_vals, world,
                                  called_via=CalledVia.DIRECT, agent_name=agent_name)
-                world.record(agent_name, label, called_via="direct")
+                # Only log the tool as having run if it actually did — a
+                # Refusal (e.g. the autonomy gate) means it never executed,
+                # and an unconditional record here would make a blocked call
+                # look identical to a successful one in the audit trail.
+                if not isinstance(r, Refusal):
+                    world.record(agent_name, label, called_via="direct")
                 return r
 
             res = _do_tool()
@@ -1409,6 +1450,13 @@ def _dispatch_emitted_call(prompt, record_text, world, agent_name) -> Any:
 
 def _invoke_tool(tool, arg_vals, world, *, called_via=CalledVia.DIRECT,
                  agent_name=None) -> Any:
+    # Autonomy runs before provenance and before any cost, matching the prompt
+    # gate's ordering. Skipped for `wire`: that dispatch is a continuation of a
+    # prompt call already gated under `prompt:{name}` in `_call_prompt`.
+    if called_via != CalledVia.WIRE:
+        refusal = _check_tool_autonomy(tool, arg_vals, world, agent_name)
+        if refusal is not None:
+            return refusal
     refusal = _check_tool_provenance(world, tool, called_via, agent_name)
     if refusal is not None:
         return refusal

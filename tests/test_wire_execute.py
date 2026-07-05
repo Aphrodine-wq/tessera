@@ -103,3 +103,42 @@ def test_direct_tool_call_unchanged_and_tagged():
     out = _invoke_tool(tool, ["Oxford", "f"], world,
                        called_via=CalledVia.DIRECT, agent_name="A")
     assert out == "Oxford: 72 (f)"  # direct path passes the gate, runs normally
+
+
+def test_autonomy_propose_blocks_direct_tool_call():
+    """Closes the gap where `_invoke_tool` only ran provenance — a `propose`-
+    level autonomy gate now blocks tool calls too, not just prompt calls."""
+    module = lower(parse_file(EXAMPLE))
+    module.autonomy = AutonomyDecl(level="propose", require_approval=["get_weather"])
+    tool = module.tools["get_weather"]
+    world = World(module=module)
+    out = _invoke_tool(tool, ["Oxford", "f"], world,
+                       called_via=CalledVia.DIRECT, agent_name="A")
+    assert isinstance(out, Refusal) and out.policy == "autonomy"
+    assert any(e.action == "approval_blocked:get_weather" for e in world.audit)
+
+
+def test_autonomy_act_freely_allows_direct_tool_call():
+    module = lower(parse_file(EXAMPLE))
+    module.autonomy = AutonomyDecl(level="act_freely", require_approval=["get_weather"])
+    tool = module.tools["get_weather"]
+    world = World(module=module)
+    out = _invoke_tool(tool, ["Oxford", "f"], world,
+                       called_via=CalledVia.DIRECT, agent_name="A")
+    assert out == "Oxford: 72 (f)"  # ran despite matching a require_approval term
+    assert not any(e.action.startswith("approval_blocked") for e in world.audit)
+
+
+def test_wire_dispatch_not_double_gated_by_autonomy():
+    """A `wire` dispatch is a continuation of a prompt call already gated under
+    `prompt:{name}` in `_call_prompt` — `_invoke_tool` must skip the tool-level
+    autonomy check for it, or the same decision gets gated twice (and risks a
+    false negative if the tool-name term doesn't match what the prompt text did)."""
+    module = lower(parse_file(EXAMPLE))
+    module.autonomy = AutonomyDecl(level="propose", require_approval=["get_weather"])
+    tool = module.tools["get_weather"]
+    world = World(module=module)
+    out = _invoke_tool(tool, ["Oxford", "f"], world,
+                       called_via=CalledVia.WIRE, agent_name="A")
+    assert out == "Oxford: 72 (f)"  # wire path skips the tool-level gate, runs normally
+    assert not any(e.action.startswith("approval_blocked") for e in world.audit)
