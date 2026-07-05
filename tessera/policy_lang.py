@@ -230,6 +230,21 @@ def _extracts(ctx: ActionContext, value=None) -> bool:
     return bool(_EXTRACTION_RE.search(s))
 
 
+def _matches(ctx: ActionContext, pattern: str) -> bool:
+    """True when the stringified value matches the given regex.
+
+    General-purpose, unlike `contains_pii`/`extracts` (fixed lexicons for a
+    specific values gate) — for ad hoc guardrails the built-in predicates
+    don't cover, e.g. `before: not matches("rm -rf|push --force")` on a
+    tool's argument. `ctx.value` for a tool-effect contract is the tool's
+    positional arg list, not a single scalar, so it's stringified same as the
+    other predicates here (`str(list)`) before matching.
+    """
+    target = ctx.value
+    s = target if isinstance(target, str) else str(target) if target is not None else ""
+    return bool(re.search(pattern, s))
+
+
 def _intent_is(ctx: ActionContext, name: str) -> bool:
     return ctx.intent == name
 
@@ -285,6 +300,7 @@ _PREDICATES: dict[str, Callable[..., Any]] = {
     "holds":          _holds,
     "action_class":   _action_class,
     "extracts":       _extracts,
+    "matches":        _matches,
     "intent_is":      _intent_is,
     "intent_match":   _intent_match,
     "cost_remaining": _cost_remaining,

@@ -14,7 +14,7 @@ from tessera.verify.passes import run_local
 from tessera.interp.eval import World, run_agent, Refusal
 from tessera.adapters.llm import CompletionResult, LLMBackend
 from tessera.adapters import llm as _llm
-from tessera.policy_lang import _intent_match, ActionContext
+from tessera.policy_lang import _intent_match, _matches, ActionContext
 
 
 def _build(src):
@@ -413,6 +413,16 @@ def test_intent_match_falls_back_to_lexical_without_embeddings(monkeypatch):
     monkeypatch.setattr(cache, "embeddings_available", lambda: False)
     score = _intent_match(ActionContext(value="roofing advice today", intent="roofing advice"))
     assert abs(score - 2 / 3) < 1e-9
+
+
+def test_matches_predicate_against_string_value():
+    assert _matches(ActionContext(value="rm -rf /home"), r"rm -rf") is True
+    assert _matches(ActionContext(value="ls -la"), r"rm -rf") is False
+
+
+def test_matches_predicate_against_tool_arg_list():
+    # a tool-effect contract's value() is the positional arg list, not a scalar
+    assert _matches(ActionContext(value=["git push --force"]), r"push --force") is True
 
 
 # --------------------------------------------------------- clause-error path
