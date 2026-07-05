@@ -1389,8 +1389,18 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
 
 
 def _dispatch_emitted_call(prompt, record_text, world, agent_name) -> Any:
-    """Parse a validated wire record and dispatch its tool (called_via=wire)."""
+    """Parse a validated wire record and dispatch its tool (called_via=wire).
+
+    Mirrors the direct-call path's contract gating (op Call, above) — a
+    grammar-constrained call is still an ordinary tool invocation as far as
+    `tsr:contract` before/after clauses are concerned. Without this, a
+    contract declared `on tool:X` would silently never fire for any tool
+    reached via `emits=X execute=true`, which is exactly the dispatch path an
+    agent built around constrained decoding actually uses.
+    """
     from ..adapters.wire import parse_emitted_record
+    from . import substrates
+
     tool = world.module.tools.get(prompt.emits)
     if tool is None:                      # emits pointed at an unknown tool
         return record_text
@@ -1403,10 +1413,30 @@ def _dispatch_emitted_call(prompt, record_text, world, agent_name) -> Any:
     except KeyError as e:
         raise RuntimeError_(
             f"emitted record for tool {tool.name!r} missing field {e}")
-    res = _invoke_tool(tool, arg_vals, world,
-                       called_via=CalledVia.WIRE, agent_name=agent_name)
-    world.record(agent_name, f"tool:{tool.name}",
-                 called_via="wire", address=record.address)
+
+    label = f"tool:{tool.name}"
+    intent_t = _active_intent(world, agent_name)
+    caps_t = (frozenset(world.state_for(agent_name).capabilities)
+              if agent_name is not None else frozenset())
+    if agent_name is not None:
+        res_b = substrates.evaluate_contracts(
+            world, agent_name, label, "before",
+            value=arg_vals, intent=intent_t, caps=caps_t, args=arg_vals)
+        ref = substrates.enforce_contract_refusal(world, agent_name, res_b, label, "before")
+        if ref is not None:
+            return ref
+
+    def _do_tool():
+        r = _invoke_tool(tool, arg_vals, world,
+                         called_via=CalledVia.WIRE, agent_name=agent_name)
+        world.record(agent_name, label, called_via="wire", address=record.address)
+        return r
+
+    res = _do_tool()
+    if agent_name is not None:
+        res = _enforce_after_contracts(
+            world, agent_name, label, res, intent_t, caps_t,
+            regen=_do_tool, as_refusal=True)
     return res
 
 

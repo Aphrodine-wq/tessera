@@ -103,3 +103,60 @@ def test_direct_tool_call_unchanged_and_tagged():
     out = _invoke_tool(tool, ["Oxford", "f"], world,
                        called_via=CalledVia.DIRECT, agent_name="A")
     assert out == "Oxford: 72 (f)"  # direct path passes the gate, runs normally
+
+
+_GUARDED_SOURCE = """---
+agent: WeatherActor
+capabilities_requested: []
+---
+
+```tsr:tool
+tool get_weather(location: String, units: String) -> String from tessera.adapters.langchain._fallback_weather
+```
+
+```tsr:contract
+contract no_oxford on tool:get_weather {
+  before: not matches("Oxford")
+  on_violation: refuse
+}
+```
+
+```tsr:prompt emits=get_weather execute=true
+prompt weather_call(place: String) -> String = "Call get_weather for {place}"
+```
+
+```tsr:agent
+agent WeatherActor {
+  beliefs:
+    @last_write place: String
+  intentions:
+    plan act_weather {
+      let report = weather_call(place)
+      return report
+    }
+}
+```
+"""
+
+
+@requires_tson
+def test_execute_path_honors_contract_before_gate(monkeypatch):
+    """Regression: a tsr:contract before-clause on a tool must fire on the
+    execute=true wire-dispatch path, not just the direct-call path. Before
+    this fix, _dispatch_emitted_call invoked the tool with no contract check
+    at all — a declared guardrail would silently never run for exactly the
+    dispatch mechanism a constrained-decoding agent actually uses."""
+    from tessera.parser.module import parse_source
+
+    module = lower(parse_source(_GUARDED_SOURCE, path="<inline>"))
+    stub = _GbnfStub("!get_weather #c1 location:Oxford units:f")
+    monkeypatch.setattr("tessera.adapters.llm.get_backend", lambda *a, **k: stub)
+
+    world = World(module=module)
+    result = run_agent(module, "WeatherActor",
+                       initial_beliefs={"place": "Oxford, MS"}, world=world)
+
+    assert isinstance(result, Refusal)
+    assert not any(e.action == "tool:get_weather" for e in world.audit), (
+        "tool ran despite the before-gate — contract was not enforced on the wire path"
+    )
