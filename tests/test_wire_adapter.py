@@ -59,6 +59,19 @@ def test_schema_from_tool_maps_params():
     ]
 
 
+@requires_tson
+def test_compile_tool_pins_fixed_address():
+    """compile_tool must not use the free-generated `id` address rule — its
+    unbounded repetition ([a-z][a-z0-9_]*) gives the sampler no pressure to
+    terminate, and a real completion was observed running ~230 tokens into
+    the address alone without ever reaching the schema's one required field.
+    Each enforce_complete() call is independent, so a fixed address costs
+    nothing and removes the failure mode outright."""
+    c = compile_tool(_tool())
+    assert 'addr ::= "#c1"' in c.gbnf
+    assert "id ::=" not in c.gbnf
+
+
 def test_tier_selection():
     assert tier_for(_StubBackend("llamacpp")) == "gbnf"
     assert tier_for(_StubBackend("llama_server")) == "gbnf"

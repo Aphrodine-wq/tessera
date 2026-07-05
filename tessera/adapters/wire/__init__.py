@@ -76,9 +76,21 @@ def schema_from_tool(tool) -> "Schema":
 
 
 def compile_tool(tool) -> "Compiled":
-    """Compile a Tessera ``ToolDecl`` straight to wire artifacts."""
+    """Compile a Tessera ``ToolDecl`` straight to wire artifacts.
+
+    Pins the call address to a fixed literal (``fixed_address="c1"``) rather
+    than the schema-compiler's default free-generated ``id`` rule
+    (``[a-z] [a-z0-9_]*``, unbounded repetition). Each `enforce_complete()`
+    call is one independent completion — there's no multi-call correlation
+    that needs a variable address — so letting the grammar generate one is
+    pure downside: an unbounded repetition the sampler has no pressure to
+    terminate, which can run past max_tokens before ever reaching the
+    mandatory field(s) that follow it, producing a truncated, field-missing
+    "valid prefix" record. Observed directly: a real completion ran ~230
+    tokens into the address alone and never reached its one required field.
+    """
     _require()
-    return compile_schema(schema_from_tool(tool))
+    return compile_schema(schema_from_tool(tool), fixed_address="c1")
 
 
 def tier_for(backend) -> str:
