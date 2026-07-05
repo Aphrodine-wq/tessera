@@ -1769,6 +1769,7 @@ _DP_CONF_THRESH_RE = re.compile(r"confidence_threshold\s*:\s*([0-9.]+)")
 _DP_BUDGET_THRESH_RE = re.compile(r"budget_threshold\s*:\s*([0-9.]+)")
 _DP_DEFAULT_CONF_RE = re.compile(r"default_confidence\s*:\s*([0-9.]+)")
 _DP_IRREV_RE = re.compile(r"irreversible\s*:\s*\[([^\]]*)\]")
+_DP_SLOW_BACKEND_RE = re.compile(r"slow_backend\s*:\s*(\w+)")
 
 
 def _lower_dual_process(block: SubstrateBlock, mod: Module) -> None:
@@ -1794,6 +1795,9 @@ def _lower_dual_process(block: SubstrateBlock, mod: Module) -> None:
     im = _DP_IRREV_RE.search(body)
     if im:
         decl.irreversible_terms = [s.strip() for s in im.group(1).split(",") if s.strip()]
+    sb = _DP_SLOW_BACKEND_RE.search(body)
+    if sb:
+        decl.slow_backend = sb.group(1)
     mod.dual_process = decl
 
 

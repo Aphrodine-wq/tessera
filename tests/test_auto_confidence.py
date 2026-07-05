@@ -101,3 +101,69 @@ def test_low_confidence_prompt_routed_slow():
 
 def test_high_confidence_prompt_routed_fast():
     assert _routed(0.9) == "fast"
+
+
+DUAL_WITH_ESCALATION = """```tsr:dual_process
+dual_process {
+  preferred: fast
+  confidence_threshold: 0.7
+  slow_backend: escalated
+}
+```"""
+
+
+def _advisor_with_escalation() -> str:
+    return f"""---
+agent: Advisor
+tessera_version: 0.2
+---
+
+{DUAL_WITH_ESCALATION}
+
+```tsr:agent
+agent Advisor {{
+  beliefs:
+    @last_write q: String
+  intentions:
+    plan advise {{ return act(q) }}
+}}
+```
+
+```tsr:prompt
+prompt act(q: String) -> String = "{{q}}"
+```
+"""
+
+
+def _backend_used(confidence, monkeypatch):
+    from tessera.adapters.llm import CompletionResult
+
+    class _Stub:
+        def __init__(self, name):
+            self.name = name
+            self.cost_dollars = 0.0
+
+        def complete(self, prompt, **opts):
+            return CompletionResult(text="ok", backend=self.name, model="stub")
+
+    def fake_get_backend(name=None):
+        return _Stub(name or "noop")
+
+    monkeypatch.setattr("tessera.adapters.llm.get_backend", fake_get_backend)
+
+    m = lower(parse_source(_advisor_with_escalation(), path="<inline>"))
+    w = World(module=m)
+    run_agent(m, "Advisor",
+              initial_beliefs={"q": "summarize", "_confidence": confidence},
+              world=w, concurrent=False)
+    prompts = [e for e in w.audit if e.action == "prompt:act"]
+    assert prompts, "expected a prompt:act audit event"
+    return prompts[0].detail.get("backend")
+
+
+def test_low_confidence_escalates_to_configured_slow_backend(monkeypatch):
+    assert _backend_used(0.4, monkeypatch) == "escalated"
+
+
+def test_high_confidence_uses_default_backend(monkeypatch):
+    assert _backend_used(0.9, monkeypatch) == "noop"

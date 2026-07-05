@@ -612,12 +612,19 @@ class DualProcessDecl:
     and whether the plan touches an irreversible action term. The decision is
     audit-emitted as `dual_process:route` and stored on the agent so downstream
     steps can read the active mode.
+
+    `slow_backend`, when set, is an LLM backend name (e.g. `anthropic`,
+    `llamacpp`) that a slow-routed call escalates to instead of the module's
+    default backend — "slow" then means an actually-smarter model, not just
+    the default model told to deliberate more. Unset preserves the prior
+    behavior (same backend, forced-fresh, a deliberation preamble).
     """
     preferred: str = "fast"                       # "fast" | "slow"
     confidence_threshold: float = 0.7
     budget_threshold: float = 0.2
     default_confidence: float = 1.0
     irreversible_terms: list[str] = field(default_factory=list)
+    slow_backend: str | None = None
 
 
 @dataclass

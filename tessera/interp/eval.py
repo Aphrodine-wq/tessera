@@ -1346,7 +1346,9 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
                          routed=("slow" if slow else "fast"), cost=0.0, cached=True)
             text, emitted = cached["text"], None
         else:
-            backend = get_backend()
+            dp = world.module.dual_process
+            slow_backend = dp.slow_backend if (slow and dp is not None) else None
+            backend = get_backend(slow_backend)
             if compiled is not None:
                 from ..adapters.wire import enforce_complete
                 r = enforce_complete(backend, rendered, compiled)
@@ -1357,7 +1359,8 @@ def _call_prompt(prompt, arg_vals, world, agent_name=None) -> Any:
             semantic_cache_put(cache_key, r.text, backend=r.backend, model=r.model)
             world.record(agent_name, f"prompt:{prompt.name}", traits_fired=fired_names,
                          ethics_applied=ethics_applied, recalled=recalled,
-                         routed=("slow" if slow else "fast"), cost=r.cost_dollars, cached=False)
+                         routed=("slow" if slow else "fast"), backend=r.backend,
+                         cost=r.cost_dollars, cached=False)
             text, emitted = r.text, r
         if agent_name is not None:
             gated = substrates.on_prompt_output(world, agent_name, prompt.name, text)
